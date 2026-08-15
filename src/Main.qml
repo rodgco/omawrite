@@ -5,6 +5,7 @@ import QtQuick.Dialogs as Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
 import "EditorMutations.js" as EditorMutations
+import "Vim.js" as Vim
 
 ApplicationWindow {
     id: win
@@ -38,6 +39,8 @@ ApplicationWindow {
     property string pendingAction: ""
     property bool replaceOpen: false
     property bool awaitingPendingSave: false
+    readonly property bool vimMode: backend.vimMode
+    property string vimStatus: ""
 
     Material.theme: darkMode ? Material.Dark : Material.Light
     Material.accent: backend.themeAccent
@@ -135,6 +138,16 @@ ApplicationWindow {
         searchUpdating = false;
         replaceOpen = false;
         editor.forceActiveFocus();
+        editor.resetVim();
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Alt+V"
+        context: Qt.ApplicationShortcut
+        onActivated: {
+            backend.vimMode = !backend.vimMode;
+            editor.forceActiveFocus();
+        }
     }
 
     Shortcut {
@@ -331,7 +344,7 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         anchors.centerIn: parent
         contentItem: Label {
-            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
+            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nF11 / Super+F  Fullscreen\nCtrl+Alt+V  Vim mode\nCtrl+?  Shortcuts"
             lineHeight: 1.5
         }
     }
@@ -554,11 +567,89 @@ ApplicationWindow {
                 // the compositor delivers the fractional scale after the
                 // first frame). Fall back to Qt's scalable renderer there.
                 renderType: Screen.devicePixelRatio % 1 === 0 ? TextEdit.NativeRendering : TextEdit.QtRendering
+                // Normal mode sits on a character rather than between two, so
+                // it gets the block caret vim writers read the mode from.
                 cursorDelegate: Rectangle {
-                    width: 1
+                    width: editor.vimNormalMode
+                        ? Math.max(2, Math.round(writerFontMetrics.averageCharacterWidth))
+                        : 1
                     color: win.strongTextColor
+                    opacity: editor.vimNormalMode ? 0.45 : 1
                 }
                 onCursorRectangleChanged: editorFlick.ensureCursorVisible()
+
+                property var vimState: Vim.createState()
+                property var vimHost: Vim.createHost(editor, {
+                    beginChange: function() { backend.beginEditBlock(); },
+                    endChange: function() { backend.endEditBlock(); },
+                    settle: function(position, direction) {
+                        return direction >= 0
+                            ? editor.skipHiddenForward(position)
+                            : editor.skipHiddenBackward(position);
+                    },
+                    page: function(direction) { editor.movePage(direction, false); },
+                    search: function() {
+                        win.searchOpen = true;
+                        searchField.forceActiveFocus();
+                        searchField.selectAll();
+                    },
+                    searchNext: function(direction) {
+                        win.moveSearch(direction);
+                        if (win.searchMatchIndex >= 0) {
+                            editor.deselect();
+                            editor.cursorPosition = win.searchMatches[win.searchMatchIndex];
+                        }
+                    }
+                })
+                readonly property bool vimNormalMode: win.vimMode && vimState.mode !== "insert"
+
+                function resetVim() {
+                    vimState = Vim.createState();
+                    deselect();
+                    if (win.vimMode)
+                        cursorPosition = Vim.clampNormal(text, cursorPosition);
+                    publishVimStatus();
+                }
+
+                function publishVimStatus() {
+                    win.vimStatus = win.vimMode ? Vim.statusText(vimState) : "";
+                    // vimState is mutated in place, so nudge the bindings that
+                    // read the mode off it.
+                    vimStateChanged();
+                }
+
+                // Qt key events, named the way the vim engine expects.
+                function vimKeyName(event) {
+                    switch (event.key) {
+                    case Qt.Key_Escape: return "Escape";
+                    case Qt.Key_Return:
+                    case Qt.Key_Enter: return "Return";
+                    case Qt.Key_Backspace: return "Backspace";
+                    case Qt.Key_Delete: return "Delete";
+                    case Qt.Key_Left: return "Left";
+                    case Qt.Key_Right: return "Right";
+                    case Qt.Key_Up: return "Up";
+                    case Qt.Key_Down: return "Down";
+                    case Qt.Key_Home: return "Home";
+                    case Qt.Key_End: return "End";
+                    case Qt.Key_PageUp: return "PageUp";
+                    case Qt.Key_PageDown: return "PageDown";
+                    case Qt.Key_Space: return " ";
+                    case Qt.Key_Tab: return "Tab";
+                    }
+
+                    if (event.modifiers & (Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier)) {
+                        if ((event.modifiers & Qt.ControlModifier)
+                                && !(event.modifiers & (Qt.MetaModifier | Qt.AltModifier))
+                                && event.key >= Qt.Key_A && event.key <= Qt.Key_Z)
+                            return "C-" + String.fromCharCode(event.key).toLowerCase();
+                        return "";
+                    }
+
+                    return event.text.length === 1 && event.text.charCodeAt(0) >= 0x20
+                        ? event.text
+                        : "";
+                }
 
                 function replaceSelectionWith(replacement) {
                     var start = Math.min(selectionStart, selectionEnd);
@@ -733,6 +824,15 @@ ApplicationWindow {
 
                 Keys.priority: Keys.BeforeItem
                 Keys.onPressed: function(event) {
+                    if (win.vimMode) {
+                        var consumed = Vim.handleKey(vimState, vimHost, vimKeyName(event));
+                        publishVimStatus();
+                        if (consumed) {
+                            event.accepted = true;
+                            return;
+                        }
+                    }
+
                     var pasteKey = (event.key === Qt.Key_V)
                         && (event.modifiers & Qt.ControlModifier)
                         && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier | Qt.ShiftModifier));
@@ -789,9 +889,15 @@ ApplicationWindow {
                     font.weight: editor.font.weight
                 }
 
+                Connections {
+                    target: win
+                    function onVimModeChanged() { editor.resetVim(); }
+                }
+
                 Component.onCompleted: {
                     backend.attachDocument(textDocument);
                     forceActiveFocus();
+                    resetVim();
                 }
             }
         }
@@ -819,6 +925,17 @@ ApplicationWindow {
                 iconColor: win.mutedColor
                 tooltip: "Open"
                 onClicked: backend.openDialog()
+            }
+
+            Label {
+                objectName: "vimStatus"
+                text: win.vimStatus
+                visible: win.vimMode
+                color: win.mutedColor
+                font.family: "iA Writer Mono S"
+                font.pixelSize: win.scaledSize(11)
+                height: win.scaledSize(16)
+                verticalAlignment: Text.AlignVCenter
             }
 
             Label {

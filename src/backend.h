@@ -5,6 +5,7 @@
 #include <QByteArray>
 #include <QFileSystemWatcher>
 #include <QString>
+#include <QTextCursor>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
@@ -24,6 +25,7 @@ class Backend : public QObject {
     Q_PROPERTY(int wordCount READ wordCount NOTIFY wordCountChanged)
     Q_PROPERTY(bool darkMode READ darkMode WRITE setDarkMode NOTIFY darkModeChanged)
     Q_PROPERTY(qreal textScale READ textScale WRITE setTextScale NOTIFY textScaleChanged)
+    Q_PROPERTY(bool vimMode READ vimMode WRITE setVimMode NOTIFY vimModeChanged)
     Q_PROPERTY(QString themeBackground READ themeBackground NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeForeground READ themeForeground NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeAccent READ themeAccent NOTIFY themeColorsChanged)
@@ -45,6 +47,8 @@ public:
     void setDarkMode(bool darkMode);
     qreal textScale() const { return m_textScale; }
     void setTextScale(qreal textScale);
+    bool vimMode() const { return m_vimMode; }
+    void setVimMode(bool vimMode);
     QString themeBackground() const { return m_themeBackground; }
     QString themeForeground() const { return m_themeForeground; }
     QString themeAccent() const { return m_themeAccent; }
@@ -72,6 +76,8 @@ public:
     Q_INVOKABLE QVariantList hiddenRangesAt(int position) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
     Q_INVOKABLE void openExternalUrl(const QUrl &url);
+    Q_INVOKABLE void beginEditBlock();
+    Q_INVOKABLE void endEditBlock();
     Q_INVOKABLE QVariantMap windowGeometry() const;
     Q_INVOKABLE void saveWindowGeometry(int x, int y, int width, int height, bool maximized);
 
@@ -82,6 +88,7 @@ signals:
     void wordCountChanged();
     void darkModeChanged();
     void textScaleChanged();
+    void vimModeChanged();
     void themeColorsChanged();
     void closeAfterSave();
     void openDialogRequested();
@@ -117,6 +124,9 @@ private:
     int m_wordCount = 0;
     bool m_darkMode = true;
     qreal m_textScale = 1.0;
+    bool m_vimMode = false;
+    int m_editBlockDepth = 0;
+    QTextCursor m_editBlockCursor;
     bool m_loading = false;
     bool m_closeAfterSave = false;
     bool m_formattingTypography = false;

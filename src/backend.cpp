@@ -35,6 +35,7 @@
 
 constexpr qreal typoraLineHeightPercent = 140;
 const QString lastSaveDirectorySetting = QStringLiteral("file/lastSaveDirectory");
+const QString vimModeSetting = QStringLiteral("editor/vimMode");
 
 QString Backend::normalizedLinkUrl(const QString &clipboardText) {
     QString candidate = clipboardText.trimmed();
@@ -117,6 +118,8 @@ Backend::Backend(QObject *parent) : QObject(parent) {
                 emit externalChangeDetected(deleted, m_modified);
             });
 
+    m_vimMode = QSettings().value(vimModeSetting, false).toBool();
+
     loadOmarchyTheme();
     watchOmarchyTheme();
     connect(&m_themeWatcher, &QFileSystemWatcher::fileChanged, this, [this]() {
@@ -164,6 +167,36 @@ void Backend::setTextScale(qreal textScale) {
 
     m_textScale = textScale;
     emit textScaleChanged();
+}
+
+void Backend::setVimMode(bool vimMode) {
+    if (m_vimMode == vimMode)
+        return;
+
+    m_vimMode = vimMode;
+    QSettings().setValue(vimModeSetting, vimMode);
+    emit vimModeChanged();
+}
+
+// Vim commands are single edits as far as the writer is concerned, so group
+// the document changes each one makes: u then undoes the command, not the
+// remove-and-insert pair that carried it out.
+void Backend::beginEditBlock() {
+    if (!m_document)
+        return;
+
+    if (m_editBlockDepth++ == 0) {
+        m_editBlockCursor = QTextCursor(m_document);
+        m_editBlockCursor.beginEditBlock();
+    }
+}
+
+void Backend::endEditBlock() {
+    if (!m_document || m_editBlockDepth == 0)
+        return;
+
+    if (--m_editBlockDepth == 0)
+        m_editBlockCursor.endEditBlock();
 }
 
 void Backend::attachDocument(QObject *textDocument) {

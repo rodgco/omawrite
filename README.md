@@ -22,7 +22,30 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 - `Ctrl+F` searches the document. Use `Enter` or `Ctrl+G` for the next match and `Shift+Enter` for the previous match.
 - `Ctrl+H` opens find and replace.
 - `Ctrl+B`, `Ctrl+I`, and `Ctrl+K` insert bold, italic, and link Markdown.
+- `Ctrl+Alt+V` turns vim mode on and off.
 - `Ctrl+?` shows the keyboard shortcut reference.
+
+## Vim mode
+
+`Ctrl+Alt+V` toggles vim key bindings, and the choice is remembered between
+sessions. The current mode sits in the bottom-left corner, and normal mode
+draws the caret as a block. Insert mode is the plain editor: smart returns,
+list continuation and Markdown paste all behave as they do with vim mode off.
+
+- Modes: `i` `I` `a` `A` `o` `O` to insert, `v` and `V` to select, `Esc` to
+  return to normal.
+- Motions: `h` `j` `k` `l`, `w` `W` `b` `B` `e` `E`, `0` `^` `$`, `gg` `G`,
+  `{` `}`, `f` `F` `t` `T` with `;` and `,`, and `gj` / `gk` for wrapped lines.
+- Operators: `d` `c` `y` with any motion, doubled for whole lines (`dd`, `cc`,
+  `yy`), plus `D` `C` `Y` `S` `s` `x` `X` `r` `J` `~` and `p` / `P`.
+- Counts work throughout: `3j`, `d2w`, `2dd`.
+- `u` and `Ctrl+R` undo and redo a whole command at a time, and `.` repeats the
+  last change, including the text typed during it.
+- `/` opens the app's find bar, with `n` and `N` for next and previous match.
+  `Ctrl+D` and `Ctrl+U` scroll by a page.
+
+Every `Ctrl` shortcut above keeps working in either mode. There is no `:`
+command line — use `Ctrl+S` to save and `Ctrl+O` to open.
 
 Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
 and warns before an external change can replace local work.

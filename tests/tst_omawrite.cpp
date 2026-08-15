@@ -4,6 +4,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickStyle>
+#include <QQuickWindow>
 
 #include "backend.h"
 #include "markdownhighlighter.h"
@@ -162,6 +163,182 @@ private slots:
         QCOMPARE(editor->property("wrappedSelectionEnd").toInt(), 12);
     }
 
+    void movesAndEditsWithVimKeys() {
+        QScopedPointer<QObject> editor(createVimHarness());
+        QVERIFY(!editor.isNull());
+
+        // Motions stay on a character, never on the line break past it.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta\ngamma"), 0,
+                        QStringLiteral("$")).cursor, 9);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta"), 0,
+                        QStringLiteral("wl")).cursor, 7);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta"), 9,
+                        QStringLiteral("b")).cursor, 6);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha, beta"), 0,
+                        QStringLiteral("w")).cursor, 5);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha, beta"), 0,
+                        QStringLiteral("W")).cursor, 7);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\nthree"), 0,
+                        QStringLiteral("G")).cursor, 8);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\nthree"), 10,
+                        QStringLiteral("gg")).cursor, 0);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\nthree"), 0,
+                        QStringLiteral("2G")).cursor, 4);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("hello there"), 0,
+                        QStringLiteral("fh")).cursor, 7);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("hello there"), 0,
+                        QStringLiteral("th")).cursor, 6);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("hello there"), 10,
+                        QStringLiteral("Fh")).cursor, 7);
+
+        // j and k hold the column they started from across a short line.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("abcdef\nx\nabcdef"), 4,
+                        QStringLiteral("jj")).cursor, 13);
+
+        const VimResult deleted = runVim(editor.data(), QStringLiteral("alpha beta gamma"), 0,
+                                         QStringLiteral("dw"));
+        QCOMPARE(deleted.text, QStringLiteral("beta gamma"));
+        QCOMPARE(deleted.cursor, 0);
+
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta"), 6,
+                        QStringLiteral("d$")).text, QStringLiteral("alpha "));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\nthree"), 0,
+                        QStringLiteral("2dd")).text, QStringLiteral("three"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 5,
+                        QStringLiteral("dd")).text, QStringLiteral("one"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("abcdef"), 1,
+                        QStringLiteral("3x")).text, QStringLiteral("aef"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
+                        QStringLiteral("J")).text, QStringLiteral("one two"));
+        // Nothing below to join to, so the line is left as it is.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one two"), 0,
+                        QStringLiteral("J")).text, QStringLiteral("one two"));
+
+        // Whole-line yank pastes below the line the caret is on.
+        const VimResult pasted = runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
+                                        QStringLiteral("yyp"));
+        QCOMPARE(pasted.text, QStringLiteral("one\none\ntwo"));
+        QCOMPARE(pasted.cursor, 4);
+
+        const VimResult swapped = runVim(editor.data(), QStringLiteral("ab"), 0,
+                                         QStringLiteral("xp"));
+        QCOMPARE(swapped.text, QStringLiteral("ba"));
+        QCOMPARE(swapped.cursor, 1);
+    }
+
+    void changesTextAndRepeatsWithVimKeys() {
+        QScopedPointer<QObject> editor(createVimHarness());
+        QVERIFY(!editor.isNull());
+
+        const VimResult changed = runVim(editor.data(), QStringLiteral("alpha beta"), 0,
+                                         QStringLiteral("cwomega<Esc>"));
+        QCOMPARE(changed.text, QStringLiteral("omega beta"));
+        QCOMPARE(changed.mode, QStringLiteral("normal"));
+        QCOMPARE(changed.cursor, 4);
+
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha"), 0,
+                        QStringLiteral("A!<Esc>")).text, QStringLiteral("alpha!"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha"), 2,
+                        QStringLiteral("Inew <Esc>")).text, QStringLiteral("new alpha"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one"), 0,
+                        QStringLiteral("otwo<Esc>")).text, QStringLiteral("one\ntwo"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("two"), 0,
+                        QStringLiteral("Oone<Esc>")).text, QStringLiteral("one\ntwo"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("  - item"), 4,
+                        QStringLiteral("ccnext<Esc>")).text, QStringLiteral("  next"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("cat"), 0,
+                        QStringLiteral("rb")).text, QStringLiteral("bat"));
+
+        // Visual mode operates on the highlighted characters, inclusive.
+        const VimResult visual = runVim(editor.data(), QStringLiteral("alpha beta"), 0,
+                                        QStringLiteral("vlld"));
+        QCOMPARE(visual.text, QStringLiteral("ha beta"));
+        QCOMPARE(visual.mode, QStringLiteral("normal"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\nthree"), 5,
+                        QStringLiteral("Vd")).text, QStringLiteral("one\nthree"));
+
+        // The dot command repeats the last change, typed text included.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta gamma"), 0,
+                        QStringLiteral("dw.")).text, QStringLiteral("gamma"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one two"), 0,
+                        QStringLiteral("cwX<Esc>w.")).text, QStringLiteral("X X"));
+
+        // Undo takes back the whole command, not the edits inside it.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
+                        QStringLiteral("ddu")).text, QStringLiteral("one\ntwo"));
+
+        // Normal mode never lets a plain letter reach the document.
+        const VimResult swallowed = runVim(editor.data(), QStringLiteral("text"), 0,
+                                           QStringLiteral("zq"));
+        QCOMPARE(swallowed.text, QStringLiteral("text"));
+
+        // Insert mode hands every key back to the editor.
+        QCOMPARE(editor->property("unhandled").toStringList(), QStringList());
+        runVim(editor.data(), QStringLiteral("x"), 0, QStringLiteral("ia"));
+        QCOMPARE(editor->property("unhandled").toStringList(), QStringList{QStringLiteral("a")});
+    }
+
+    void routesKeyPressesThroughVimMode() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        backend.setVimMode(true);
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
+        QVERIFY(editor->property("vimNormalMode").toBool());
+
+        editor->setProperty("text", QStringLiteral("alpha beta"));
+        editor->setProperty("cursorPosition", 0);
+
+        // Normal mode keeps its keys out of the document and runs commands.
+        QTest::keyClick(window, Qt::Key_D);
+        QTest::keyClick(window, Qt::Key_W);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("beta"));
+
+        // Insert mode types, and leaves every editor behaviour in place.
+        QTest::keyClick(window, Qt::Key_I);
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("INSERT"));
+        QVERIFY(!editor->property("vimNormalMode").toBool());
+        QTest::keyClick(window, Qt::Key_X);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("xbeta"));
+
+        QTest::keyClick(window, Qt::Key_Escape);
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
+
+        backend.setVimMode(false);
+        QCOMPARE(window->property("vimStatus").toString(), QString());
+        // Escape stepped the caret back onto the x, so plain typing lands there.
+        QTest::keyClick(window, Qt::Key_D);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("dxbeta"));
+    }
+
+    void remembersVimModePreference() {
+        Backend backend;
+        QVERIFY(!backend.vimMode());
+
+        QSignalSpy vimModeSpy(&backend, &Backend::vimModeChanged);
+        backend.setVimMode(true);
+        QCOMPARE(vimModeSpy.count(), 1);
+
+        Backend restored;
+        QVERIFY(restored.vimMode());
+        restored.setVimMode(false);
+    }
+
     void savesAndOpensFromFooterButtons() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
@@ -247,7 +424,95 @@ private slots:
     }
 
 private:
+    struct VimResult {
+        QString text;
+        int cursor;
+        QString mode;
+    };
+
+    // A bare TextEdit driven by the vim engine: keys it does not consume are
+    // typed into the document, the way insert mode leaves them to the editor.
+    QObject *createVimHarness() {
+        const QString vimPath = QFINDTESTDATA("../src/Vim.js");
+        if (vimPath.isEmpty())
+            return nullptr;
+
+        const QByteArray harness = R"QML(
+            import QtQuick
+            import "Vim.js" as Vim
+
+            TextEdit {
+                property var state: Vim.createState()
+                property var host: null
+                property var unhandled: []
+
+                Component.onCompleted: host = Vim.createHost(this, {})
+
+                function reset(startText, startCursor) {
+                    state = Vim.createState();
+                    unhandled = [];
+                    text = startText;
+                    cursorPosition = startCursor;
+                }
+
+                function feed(sequence) {
+                    var keys = tokenize(sequence);
+                    for (var i = 0; i < keys.length; i++) {
+                        if (Vim.handleKey(state, host, keys[i]))
+                            continue;
+                        unhandled = unhandled.concat([keys[i]]);
+                        if (keys[i] === "Return")
+                            insert(cursorPosition, "\n");
+                        else if (keys[i] === "Backspace")
+                            remove(Math.max(0, cursorPosition - 1), cursorPosition);
+                        else if (keys[i].length === 1)
+                            insert(cursorPosition, keys[i]);
+                    }
+                }
+
+                function mode() { return state.mode; }
+
+                // "<Esc>", "<CR>" and "<C-r>" name the keys that are not
+                // a single character.
+                function tokenize(sequence) {
+                    var keys = [];
+                    for (var i = 0; i < sequence.length; i++) {
+                        if (sequence.charAt(i) !== "<") {
+                            keys.push(sequence.charAt(i));
+                            continue;
+                        }
+                        var close = sequence.indexOf(">", i);
+                        var name = sequence.slice(i + 1, close);
+                        keys.push(name === "Esc" ? "Escape" : name === "CR" ? "Return" : name);
+                        i = close;
+                    }
+                    return keys;
+                }
+            }
+        )QML";
+
+        QQmlComponent component(&m_vimEngine);
+        component.setData(harness, QUrl::fromLocalFile(
+            QFileInfo(vimPath).absolutePath() + QStringLiteral("/VimHarness.qml")));
+        if (!component.isReady()) {
+            qWarning("%s", qPrintable(component.errorString()));
+            return nullptr;
+        }
+        return component.create();
+    }
+
+    VimResult runVim(QObject *editor, const QString &text, int cursor, const QString &keys) {
+        QMetaObject::invokeMethod(editor, "reset", Q_ARG(QVariant, text), Q_ARG(QVariant, cursor));
+        QMetaObject::invokeMethod(editor, "feed", Q_ARG(QVariant, keys));
+        QVariant mode;
+        QMetaObject::invokeMethod(editor, "mode", Q_RETURN_ARG(QVariant, mode));
+        return {editor->property("text").toString(),
+                editor->property("cursorPosition").toInt(),
+                mode.toString()};
+    }
+
     QTemporaryDir m_settingsDirectory;
+    QQmlEngine m_vimEngine;
 };
 
 QTEST_MAIN(OmawriteTest)
