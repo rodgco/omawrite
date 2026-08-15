@@ -41,6 +41,8 @@ ApplicationWindow {
     property bool awaitingPendingSave: false
     readonly property bool vimMode: backend.vimMode
     property string vimStatus: ""
+    property string vimMessage: ""
+    property bool commandOpen: false
 
     Material.theme: darkMode ? Material.Dark : Material.Light
     Material.accent: backend.themeAccent
@@ -139,6 +141,28 @@ ApplicationWindow {
         replaceOpen = false;
         editor.forceActiveFocus();
         editor.resetVim();
+    }
+
+    function openCommandLine(prefill) {
+        vimMessage = "";
+        commandField.text = prefill;
+        commandOpen = true;
+        commandField.forceActiveFocus();
+        commandField.cursorPosition = commandField.text.length;
+    }
+
+    function closeCommandLine() {
+        commandOpen = false;
+        commandField.text = "";
+        editor.forceActiveFocus();
+    }
+
+    function runCommandLine() {
+        var typed = commandField.text;
+        closeCommandLine();
+        var result = Vim.runCommand(editor.vimState, editor.vimHost, typed);
+        editor.publishVimStatus();
+        vimMessage = result.message;
     }
 
     Shortcut {
@@ -599,12 +623,45 @@ ApplicationWindow {
                             editor.deselect();
                             editor.cursorPosition = win.searchMatches[win.searchMatchIndex];
                         }
+                    },
+                    commandLine: function(prefill) { win.openCommandLine(prefill); },
+                    save: function() { backend.save(); },
+                    saveAs: function(path) { backend.saveAs(backend.resolvePath(path)); },
+                    saveAndQuit: function() { backend.saveForClose(); },
+                    quit: function(force) {
+                        if (force) {
+                            backend.discardRecovery();
+                            win.closeConfirmed = true;
+                        }
+                        win.close();
+                    },
+                    open: function(path, force) {
+                        if (path === "") {
+                            if (force)
+                                backend.reloadFromDisk();
+                            else
+                                backend.openDialog();
+                            return;
+                        }
+                        var url = backend.resolvePath(path);
+                        if (force)
+                            backend.open(url);
+                        else
+                            win.requestOpen(url);
+                    },
+                    clearSearch: function() {
+                        win.searchUpdating = true;
+                        backend.setSearchHighlight("", -1);
+                        win.searchUpdating = false;
                     }
                 })
                 readonly property bool vimNormalMode: win.vimMode && vimState.mode !== "insert"
 
                 function resetVim() {
                     vimState = Vim.createState();
+                    win.vimMessage = "";
+                    if (win.commandOpen)
+                        win.closeCommandLine();
                     deselect();
                     if (win.vimMode)
                         cursorPosition = Vim.clampNormal(text, cursorPosition);
@@ -825,6 +882,7 @@ ApplicationWindow {
                 Keys.priority: Keys.BeforeItem
                 Keys.onPressed: function(event) {
                     if (win.vimMode) {
+                        win.vimMessage = "";
                         var consumed = Vim.handleKey(vimState, vimHost, vimKeyName(event));
                         publishVimStatus();
                         if (consumed) {
@@ -939,6 +997,19 @@ ApplicationWindow {
             }
 
             Label {
+                objectName: "vimMessage"
+                text: win.vimMessage
+                visible: text !== ""
+                color: win.mutedColor
+                font.family: "iA Writer Mono S"
+                font.pixelSize: win.scaledSize(11)
+                height: win.scaledSize(16)
+                elide: Text.ElideRight
+                width: Math.min(420, win.width / 3)
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            Label {
                 text: backend.status
                 color: win.mutedColor
                 font.family: "iA Writer Mono S"
@@ -963,6 +1034,66 @@ ApplicationWindow {
             font.pixelSize: win.scaledSize(11)
         }
 
+
+        // The : command line, along the bottom edge over the footer strip.
+        Rectangle {
+            objectName: "commandLine"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: win.scaledSize(30)
+            visible: win.commandOpen
+            z: 10
+            color: win.pageColor
+
+            Row {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 0
+
+                Label {
+                    text: ":"
+                    color: win.textColor
+                    font.family: "iA Writer Mono S"
+                    font.pixelSize: win.scaledSize(15)
+                    height: parent.height
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                TextInput {
+                    id: commandField
+                    objectName: "commandField"
+                    width: parent.width - win.scaledSize(15)
+                    height: parent.height
+                    verticalAlignment: TextInput.AlignVCenter
+                    selectByMouse: true
+                    color: win.textColor
+                    selectionColor: win.selectionFill
+                    selectedTextColor: win.strongTextColor
+                    font.family: "iA Writer Mono S"
+                    font.pixelSize: win.scaledSize(15)
+                    clip: true
+
+                    Keys.onReturnPressed: function(event) {
+                        win.runCommandLine();
+                        event.accepted = true;
+                    }
+                    Keys.onEscapePressed: function(event) {
+                        win.closeCommandLine();
+                        event.accepted = true;
+                    }
+                    // Rubbing out the last character leaves the command line,
+                    // the way backspacing past the : does in vim.
+                    Keys.onPressed: function(event) {
+                        if (event.key === Qt.Key_Backspace && text.length === 0) {
+                            win.closeCommandLine();
+                            event.accepted = true;
+                        }
+                    }
+                }
+            }
+        }
 
         Pane {
             anchors.top: parent.top

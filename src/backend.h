@@ -76,6 +76,7 @@ public:
     Q_INVOKABLE QVariantList hiddenRangesAt(int position) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
     Q_INVOKABLE void openExternalUrl(const QUrl &url);
+    Q_INVOKABLE QUrl resolvePath(const QString &path) const;
     Q_INVOKABLE void beginEditBlock();
     Q_INVOKABLE void endEditBlock();
     Q_INVOKABLE QVariantMap windowGeometry() const;

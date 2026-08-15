@@ -278,6 +278,136 @@ private slots:
         QCOMPARE(editor->property("unhandled").toStringList(), QStringList{QStringLiteral("a")});
     }
 
+    void runsExCommands() {
+        QScopedPointer<QObject> editor(createVimHarness());
+        QVERIFY(!editor.isNull());
+
+        const QString document = QStringLiteral("one fish\ntwo fish\nred fish\nblue fish");
+
+        // A bare range jumps; the caret lands on the first non-blank.
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":3")).cursor, 18);
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":$")).cursor, 27);
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":99")).cursor, 27);
+
+        // Substitute defaults to the current line, once per line.
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":s/fish/cat/")).text,
+                 QStringLiteral("one cat\ntwo fish\nred fish\nblue fish"));
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":%s/fish/cat/")).text,
+                 QStringLiteral("one cat\ntwo cat\nred cat\nblue cat"));
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":2,3s/fish/cat/")).text,
+                 QStringLiteral("one fish\ntwo cat\nred cat\nblue fish"));
+
+        // g replaces every match on the line, i ignores case.
+        QCOMPARE(runEx(editor.data(), QStringLiteral("a a a"), 0,
+                       QStringLiteral(":s/a/b/")).text, QStringLiteral("b a a"));
+        QCOMPARE(runEx(editor.data(), QStringLiteral("a a a"), 0,
+                       QStringLiteral(":s/a/b/g")).text, QStringLiteral("b b b"));
+        QCOMPARE(runEx(editor.data(), QStringLiteral("Fish fish"), 0,
+                       QStringLiteral(":s/fish/cat/gi")).text, QStringLiteral("cat cat"));
+
+        // & is the whole match, \1 a captured group, and a separator can be
+        // escaped or swapped for one that does not collide with the text.
+        QCOMPARE(runEx(editor.data(), QStringLiteral("hello"), 0,
+                       QStringLiteral(":s/hello/[&]/")).text, QStringLiteral("[hello]"));
+        QCOMPARE(runEx(editor.data(), QStringLiteral("Doe, John"), 0,
+                       QStringLiteral(":s/(\\w+), (\\w+)/\\2 \\1/")).text,
+                 QStringLiteral("John Doe"));
+        QCOMPARE(runEx(editor.data(), QStringLiteral("a/b"), 0,
+                       QStringLiteral(":s#/#-#")).text, QStringLiteral("a-b"));
+
+        // Reported outcomes, including the ones that change nothing.
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":%s/fish/cat/")).message,
+                 QStringLiteral("4 substitutions on 4 lines"));
+        const VimResult missing = runEx(editor.data(), document, 0,
+                                        QStringLiteral(":s/whale/cat/"));
+        QVERIFY(!missing.ok);
+        QCOMPARE(missing.message, QStringLiteral("Pattern not found: whale"));
+        QCOMPARE(missing.text, document);
+
+        const VimResult unknown = runEx(editor.data(), document, 0, QStringLiteral(":frobnicate"));
+        QVERIFY(!unknown.ok);
+        QCOMPARE(unknown.message, QStringLiteral("Not an editor command: frobnicate"));
+
+        const VimResult broken = runEx(editor.data(), document, 0, QStringLiteral(":s/(unclosed/x/"));
+        QVERIFY(!broken.ok);
+        QCOMPARE(broken.text, document);
+
+        // :d takes whole lines, and leaves them in the register for p.
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":2d")).text,
+                 QStringLiteral("one fish\nred fish\nblue fish"));
+        QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":2,3d")).text,
+                 QStringLiteral("one fish\nblue fish"));
+
+        // An empty pattern reuses the last one.
+        QMetaObject::invokeMethod(editor.data(), "reset", Q_ARG(QVariant, document), Q_ARG(QVariant, 0));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":s/fish/cat/")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":2s//dog/")));
+        QCOMPARE(editor->property("text").toString(),
+                 QStringLiteral("one cat\ntwo dog\nred fish\nblue fish"));
+
+        // Pressing : in visual mode opens the command line prefilled with the
+        // range covering the selected lines.
+        QMetaObject::invokeMethod(editor.data(), "reset", Q_ARG(QVariant, document), Q_ARG(QVariant, 9));
+        QMetaObject::invokeMethod(editor.data(), "feed", Q_ARG(QVariant, QStringLiteral("Vj:")));
+        QCOMPARE(editor->property("calls").toStringList(),
+                 QStringList{QStringLiteral("commandLine:'<,'>")});
+        QCOMPARE(readVim(editor.data()).mode, QStringLiteral("normal"));
+        QMetaObject::invokeMethod(editor.data(), "ex",
+                                  Q_ARG(QVariant, QStringLiteral(":'<,'>s/fish/cat/")));
+        QCOMPARE(editor->property("text").toString(),
+                 QStringLiteral("one fish\ntwo cat\nred cat\nblue fish"));
+    }
+
+    void callsTheApplicationForFileExCommands() {
+        QScopedPointer<QObject> editor(createVimHarness());
+        QVERIFY(!editor.isNull());
+
+        QMetaObject::invokeMethod(editor.data(), "reset", Q_ARG(QVariant, QString()), Q_ARG(QVariant, 0));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":w")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":w draft.md")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":wq")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":q")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":q!")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":e notes.md")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":noh")));
+        // Abbreviations reach the same commands as the spelled-out names.
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":write")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":x")));
+        QMetaObject::invokeMethod(editor.data(), "ex", Q_ARG(QVariant, QStringLiteral(":quit")));
+
+        QCOMPARE(editor->property("calls").toStringList(),
+                 QStringList({QStringLiteral("save"),
+                              QStringLiteral("saveAs:draft.md"),
+                              QStringLiteral("saveAndQuit"),
+                              QStringLiteral("quit:false"),
+                              QStringLiteral("quit:true"),
+                              QStringLiteral("open:notes.md:false"),
+                              QStringLiteral("clearSearch"),
+                              QStringLiteral("save"),
+                              QStringLiteral("saveAndQuit"),
+                              QStringLiteral("quit:false")}));
+    }
+
+    void resolvesPathsTypedOnTheCommandLine() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        Backend backend;
+        // With no file open, a bare name lands in the home directory.
+        QCOMPARE(backend.resolvePath(QStringLiteral("draft.md")).toLocalFile(),
+                 QDir::homePath() + QStringLiteral("/draft.md"));
+        QCOMPARE(backend.resolvePath(QStringLiteral("~/notes/draft.md")).toLocalFile(),
+                 QDir::homePath() + QStringLiteral("/notes/draft.md"));
+        QCOMPARE(backend.resolvePath(QStringLiteral("/tmp/draft.md")).toLocalFile(),
+                 QStringLiteral("/tmp/draft.md"));
+        QVERIFY(backend.resolvePath(QString()).isEmpty());
+
+        // Once a file is open, a relative name is a sibling of it.
+        backend.saveAs(QUrl::fromLocalFile(directory.filePath(QStringLiteral("open.md"))));
+        QCOMPARE(backend.resolvePath(QStringLiteral("draft.md")).toLocalFile(),
+                 directory.filePath(QStringLiteral("draft.md")));
+    }
+
     void routesKeyPressesThroughVimMode() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
@@ -324,6 +454,77 @@ private slots:
         // Escape stepped the caret back onto the x, so plain typing lands there.
         QTest::keyClick(window, Qt::Key_D);
         QCOMPARE(editor->property("text").toString(), QStringLiteral("dxbeta"));
+    }
+
+    void opensTheCommandLineFromTheEditor() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        backend.setVimMode(true);
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QObject *commandField = window->findChild<QObject *>(QStringLiteral("commandField"));
+        QVERIFY(editor);
+        QVERIFY(commandField);
+        QVERIFY(!window->property("commandOpen").toBool());
+
+        editor->setProperty("text", QStringLiteral("one fish\ntwo fish\nred fish"));
+        editor->setProperty("cursorPosition", 0);
+
+        // : opens the command line and takes the keyboard with it.
+        QTest::keyClick(window, Qt::Key_Colon);
+        QVERIFY(window->property("commandOpen").toBool());
+        QVERIFY(commandField->property("activeFocus").toBool());
+        QCOMPARE(editor->property("text").toString(),
+                 QStringLiteral("one fish\ntwo fish\nred fish"));
+
+        // A line number jumps and closes the command line.
+        typeInto(window, QStringLiteral("2"));
+        QTest::keyClick(window, Qt::Key_Return);
+        QVERIFY(!window->property("commandOpen").toBool());
+        QCOMPARE(editor->property("cursorPosition").toInt(), 9);
+        QVERIFY(editor->property("activeFocus").toBool());
+
+        // A substitute runs against the document.
+        QTest::keyClick(window, Qt::Key_Colon);
+        typeInto(window, QStringLiteral("%s/fish/cat/"));
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(editor->property("text").toString(),
+                 QStringLiteral("one cat\ntwo cat\nred cat"));
+        QCOMPARE(window->property("vimMessage").toString(),
+                 QStringLiteral("3 substitutions on 3 lines"));
+
+        // u takes the whole substitute back in one step.
+        QTest::keyClick(window, Qt::Key_U);
+        QCOMPARE(editor->property("text").toString(),
+                 QStringLiteral("one fish\ntwo fish\nred fish"));
+        QCOMPARE(window->property("vimMessage").toString(), QString());
+
+        // Escape abandons a command line without running it.
+        QTest::keyClick(window, Qt::Key_Colon);
+        typeInto(window, QStringLiteral("%s/fish/dog/"));
+        QTest::keyClick(window, Qt::Key_Escape);
+        QVERIFY(!window->property("commandOpen").toBool());
+        QCOMPARE(editor->property("text").toString(),
+                 QStringLiteral("one fish\ntwo fish\nred fish"));
+
+        // With vim mode off, : is just a character again.
+        backend.setVimMode(false);
+        QTest::keyClick(window, Qt::Key_Colon);
+        QVERIFY(!window->property("commandOpen").toBool());
+        QVERIFY(editor->property("text").toString().contains(QStringLiteral(":")));
     }
 
     void remembersVimModePreference() {
@@ -428,6 +629,8 @@ private:
         QString text;
         int cursor;
         QString mode;
+        QString message;
+        bool ok;
     };
 
     // A bare TextEdit driven by the vim engine: keys it does not consume are
@@ -445,14 +648,36 @@ private:
                 property var state: Vim.createState()
                 property var host: null
                 property var unhandled: []
+                property var calls: []
+                property string message: ""
+                property bool ok: true
 
-                Component.onCompleted: host = Vim.createHost(this, {})
+                Component.onCompleted: host = Vim.createHost(this, {
+                    save: function() { record("save"); },
+                    saveAs: function(path) { record("saveAs:" + path); },
+                    saveAndQuit: function() { record("saveAndQuit"); },
+                    quit: function(force) { record("quit:" + force); },
+                    open: function(path, force) { record("open:" + path + ":" + force); },
+                    clearSearch: function() { record("clearSearch"); },
+                    commandLine: function(prefill) { record("commandLine:" + prefill); }
+                })
+
+                function record(call) { calls = calls.concat([call]); }
 
                 function reset(startText, startCursor) {
                     state = Vim.createState();
                     unhandled = [];
+                    calls = [];
+                    message = "";
+                    ok = true;
                     text = startText;
                     cursorPosition = startCursor;
+                }
+
+                function ex(command) {
+                    var result = Vim.runCommand(state, host, command);
+                    message = result.message;
+                    ok = result.ok;
                 }
 
                 function feed(sequence) {
@@ -501,14 +726,32 @@ private:
         return component.create();
     }
 
-    VimResult runVim(QObject *editor, const QString &text, int cursor, const QString &keys) {
-        QMetaObject::invokeMethod(editor, "reset", Q_ARG(QVariant, text), Q_ARG(QVariant, cursor));
-        QMetaObject::invokeMethod(editor, "feed", Q_ARG(QVariant, keys));
+    // QTest::keyClicks only takes widgets, so type into a QWindow by hand.
+    void typeInto(QQuickWindow *window, const QString &characters) {
+        for (const QChar &character : characters)
+            QTest::keyClick(window, character.toLatin1());
+    }
+
+    VimResult readVim(QObject *editor) {
         QVariant mode;
         QMetaObject::invokeMethod(editor, "mode", Q_RETURN_ARG(QVariant, mode));
         return {editor->property("text").toString(),
                 editor->property("cursorPosition").toInt(),
-                mode.toString()};
+                mode.toString(),
+                editor->property("message").toString(),
+                editor->property("ok").toBool()};
+    }
+
+    VimResult runVim(QObject *editor, const QString &text, int cursor, const QString &keys) {
+        QMetaObject::invokeMethod(editor, "reset", Q_ARG(QVariant, text), Q_ARG(QVariant, cursor));
+        QMetaObject::invokeMethod(editor, "feed", Q_ARG(QVariant, keys));
+        return readVim(editor);
+    }
+
+    VimResult runEx(QObject *editor, const QString &text, int cursor, const QString &command) {
+        QMetaObject::invokeMethod(editor, "reset", Q_ARG(QVariant, text), Q_ARG(QVariant, cursor));
+        QMetaObject::invokeMethod(editor, "ex", Q_ARG(QVariant, command));
+        return readVim(editor);
     }
 
     QTemporaryDir m_settingsDirectory;

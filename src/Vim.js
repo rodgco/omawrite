@@ -21,6 +21,8 @@ function createState() {
         register: {text: "", linewise: false},
         lastFind: null,     // {command, character} for ; and ,
         lastChange: null,   // {keys, insert} replayed by .
+        lastVisual: null,   // {start, end} lines behind the '<,'> range
+        lastSubstitute: "", // pattern reused by an empty :s//
         insertSession: null,
         keys: [],
         replaying: false
@@ -76,7 +78,14 @@ function createHost(editor, hooks) {
         },
         page: function(direction) { if (hooks.page) hooks.page(direction); },
         search: function() { if (hooks.search) hooks.search(); },
-        searchNext: function(direction) { if (hooks.searchNext) hooks.searchNext(direction); }
+        searchNext: function(direction) { if (hooks.searchNext) hooks.searchNext(direction); },
+        commandLine: function(prefill) { if (hooks.commandLine) hooks.commandLine(prefill); },
+        save: function() { if (hooks.save) hooks.save(); },
+        saveAs: function(path) { if (hooks.saveAs) hooks.saveAs(path); },
+        saveAndQuit: function() { if (hooks.saveAndQuit) hooks.saveAndQuit(); },
+        quit: function(force) { if (hooks.quit) hooks.quit(force); },
+        open: function(path, force) { if (hooks.open) hooks.open(path, force); },
+        clearSearch: function() { if (hooks.clearSearch) hooks.clearSearch(); }
     };
 }
 
@@ -332,8 +341,15 @@ function enterVisual(state, host, mode) {
     showSelection(state, host);
 }
 
+function visualLines(state, host) {
+    var text = host.text();
+    return {start: lineNumberAt(text, Math.min(state.anchor, state.head)),
+            end: lineNumberAt(text, Math.max(state.anchor, state.head))};
+}
+
 function leaveVisual(state, host) {
     var head = state.head;
+    state.lastVisual = visualLines(state, host);
     state.mode = "normal";
     state.anchor = -1;
     state.head = -1;
@@ -486,6 +502,7 @@ function findMotion(state, host, command, character, count) {
 function operator(state, host, key) {
     if (state.mode === "visual" || state.mode === "vline") {
         var range = selectionRange(state, host);
+        state.lastVisual = visualLines(state, host);
         state.mode = "normal";
         state.anchor = -1;
         state.head = -1;
@@ -975,6 +992,16 @@ function simpleCommand(state, host, key) {
         resetPending(state);
         repeatChange(state, host);
         return true;
+    case ":":
+        var prefill = "";
+        if (visual) {
+            state.lastVisual = visualLines(state, host);
+            leaveVisual(state, host);
+            prefill = "'<,'>";
+        }
+        resetPending(state);
+        host.commandLine(prefill);
+        return true;
     case "/":
         resetPending(state);
         host.search();
@@ -1003,6 +1030,279 @@ function simpleCommand(state, host, key) {
     // document; modified keys fall through to the window's shortcuts.
     resetPending(state);
     return key.indexOf("C-") !== 0;
+}
+
+// ---------------------------------------------------------------- ex
+
+// The : commands worth having in a writing app: write, quit, open, jump to a
+// line, substitute, delete lines. Main.qml owns the input field and calls
+// runCommand() with whatever was typed.
+var COMMANDS = {
+    w: "write", wr: "write", wri: "write", writ: "write", write: "write",
+    wa: "write", wall: "write",
+    wq: "writequit", wqa: "writequit", wqall: "writequit", x: "writequit",
+    xi: "writequit", xit: "writequit", xa: "writequit", exi: "writequit", exit: "writequit",
+    q: "quit", qu: "quit", qui: "quit", quit: "quit",
+    qa: "quit", qal: "quit", qall: "quit", quita: "quit", quitall: "quit",
+    e: "edit", ed: "edit", edi: "edit", edit: "edit",
+    noh: "nohlsearch", nohl: "nohlsearch", nohls: "nohlsearch",
+    nohlsearch: "nohlsearch",
+    d: "delete", de: "delete", del: "delete", dele: "delete", delet: "delete",
+    "delete": "delete"
+};
+
+function runCommand(state, host, input) {
+    var command = String(input === undefined || input === null ? "" : input)
+        .replace(/^:+/, "").trim();
+    if (command === "")
+        return {ok: true, message: ""};
+
+    var range = parseRange(state, host, command);
+    var rest = range.rest;
+
+    // A bare range is a jump: :42, :$, :'<,'>
+    if (rest === "")
+        return range.given ? gotoLine(host, range.end) : {ok: true, message: ""};
+
+    var substituteMatch = rest.match(/^s(?:u|ub|ubs|ubst|ubsti|ubstit|ubstitu|ubstitut|ubstitute)?([^A-Za-z0-9 \t])([\s\S]*)$/);
+    if (substituteMatch)
+        return substitute(state, host, range, substituteMatch[1], substituteMatch[2]);
+
+    var parts = rest.match(/^([A-Za-z]+)(!?)\s*([\s\S]*)$/);
+    if (!parts)
+        return {ok: false, message: "Not an editor command: " + rest};
+
+    var name = COMMANDS[parts[1]];
+    var force = parts[2] === "!";
+    var argument = parts[3].trim();
+
+    switch (name) {
+    case "write":
+        if (argument === "")
+            host.save();
+        else
+            host.saveAs(argument);
+        return {ok: true, message: ""};
+    case "writequit":
+        if (argument === "") {
+            host.saveAndQuit();
+        } else {
+            host.saveAs(argument);
+            host.quit(false);
+        }
+        return {ok: true, message: ""};
+    case "quit":
+        host.quit(force);
+        return {ok: true, message: ""};
+    case "edit":
+        host.open(argument, force);
+        return {ok: true, message: ""};
+    case "nohlsearch":
+        host.clearSearch();
+        return {ok: true, message: ""};
+    case "delete":
+        return deleteRange(state, host, range);
+    }
+
+    return {ok: false, message: "Not an editor command: " + parts[1]};
+}
+
+function lineNumberAt(text, position) {
+    var line = 1;
+    var index = text.indexOf("\n");
+    while (index >= 0 && index < position) {
+        line++;
+        index = text.indexOf("\n", index + 1);
+    }
+    return line;
+}
+
+function lastLineNumber(text) {
+    return lineNumberAt(text, text.length);
+}
+
+function parseRange(state, host, command) {
+    var text = host.text();
+    var last = lastLineNumber(text);
+    var current = lineNumberAt(text, host.cursor());
+    var rest = command;
+    var given = false;
+    var start = current;
+    var end = current;
+
+    if (rest.charAt(0) === "%") {
+        start = 1;
+        end = last;
+        given = true;
+        rest = rest.slice(1);
+    } else if (rest.indexOf("'<,'>") === 0) {
+        var visual = state.lastVisual || {start: current, end: current};
+        start = visual.start;
+        end = visual.end;
+        given = true;
+        rest = rest.slice(5);
+    } else {
+        var first = parseAddress(rest, current, last);
+        if (first) {
+            start = first.line;
+            end = first.line;
+            given = true;
+            rest = first.rest;
+            if (rest.charAt(0) === ",") {
+                var second = parseAddress(rest.slice(1), current, last);
+                end = second ? second.line : current;
+                rest = second ? second.rest : rest.slice(1);
+            }
+        }
+    }
+
+    if (start > end) {
+        var swap = start;
+        start = end;
+        end = swap;
+    }
+    return {start: Math.max(1, Math.min(last, start)),
+            end: Math.max(1, Math.min(last, end)),
+            given: given,
+            rest: rest.replace(/^\s+/, "")};
+}
+
+function parseAddress(input, current, last) {
+    var match = input.match(/^(\d+|\.|\$)/);
+    if (!match)
+        return null;
+    var line = match[1] === "." ? current
+        : match[1] === "$" ? last
+        : parseInt(match[1], 10);
+    return {line: line, rest: input.slice(match[1].length)};
+}
+
+function gotoLine(host, line) {
+    var text = host.text();
+    host.setCursor(firstNonBlank(text, lineNumberPosition(text, line)));
+    return {ok: true, message: ""};
+}
+
+function deleteRange(state, host, range) {
+    var text = host.text();
+    var start = lineNumberPosition(text, range.start);
+    var end = lineNumberPosition(text, range.end);
+    host.beginChange();
+    applyOperator(state, host, "d", start, end, true);
+    host.endChange();
+    var lines = range.end - range.start + 1;
+    return {ok: true, message: lines > 1 ? lines + " fewer lines" : ""};
+}
+
+// :s/pattern/replacement/flags, where the pattern is a JavaScript regular
+// expression. & and \1 in the replacement stand for the match and its groups.
+function substitute(state, host, range, separator, body) {
+    var parts = splitOnSeparator(body, separator);
+    var pattern = parts[0];
+    var replacement = parts.length > 1 ? parts[1] : "";
+    var flags = parts.length > 2 ? parts[2].trim() : "";
+
+    if (pattern === "")
+        pattern = state.lastSubstitute;
+    if (pattern === "")
+        return {ok: false, message: "No previous substitute"};
+
+    var expression;
+    try {
+        expression = new RegExp(pattern, flags.indexOf("i") >= 0 ? "gi" : "g");
+    } catch (error) {
+        return {ok: false, message: "Invalid pattern: " + pattern};
+    }
+    state.lastSubstitute = pattern;
+
+    var everyMatch = flags.indexOf("g") >= 0;
+    var replaced = 0;
+    var changedLines = 0;
+    var lastChanged = -1;
+
+    host.beginChange();
+    // Bottom up, so replacing a line cannot shift the lines still to come.
+    for (var line = range.end; line >= range.start; line--) {
+        var text = host.text();
+        var start = lineNumberPosition(text, line);
+        var end = lineEnd(text, start);
+        var source = text.slice(start, end);
+        var here = 0;
+        var updated = source.replace(expression, function(whole) {
+            if (!everyMatch && here > 0)
+                return whole;
+            here++;
+            return expandReplacement(replacement, arguments);
+        });
+        if (here === 0)
+            continue;
+        host.replace(start, end, updated);
+        replaced += here;
+        changedLines++;
+        lastChanged = line;
+    }
+    host.endChange();
+
+    if (replaced === 0)
+        return {ok: false, message: "Pattern not found: " + pattern};
+
+    gotoLine(host, lastChanged);
+    return {ok: true,
+            message: replaced > 1
+                ? replaced + " substitutions on " + changedLines
+                    + (changedLines > 1 ? " lines" : " line")
+                : ""};
+}
+
+function splitOnSeparator(body, separator) {
+    var parts = [];
+    var current = "";
+    for (var i = 0; i < body.length; i++) {
+        var character = body.charAt(i);
+        if (character === "\\" && i + 1 < body.length) {
+            var next = body.charAt(i + 1);
+            // An escaped separator is a literal one; anything else stays
+            // escaped for the regular expression to read.
+            current += next === separator ? next : character + next;
+            i++;
+            continue;
+        }
+        if (character === separator) {
+            parts.push(current);
+            current = "";
+            continue;
+        }
+        current += character;
+    }
+    parts.push(current);
+    return parts;
+}
+
+function expandReplacement(specification, match) {
+    var result = "";
+    for (var i = 0; i < specification.length; i++) {
+        var character = specification.charAt(i);
+        if (character === "&") {
+            result += match[0];
+            continue;
+        }
+        if (character !== "\\" || i + 1 >= specification.length) {
+            result += character;
+            continue;
+        }
+        var next = specification.charAt(++i);
+        if (next >= "0" && next <= "9") {
+            var group = parseInt(next, 10);
+            result += match[group] === undefined ? "" : match[group];
+        } else if (next === "n") {
+            result += "\n";
+        } else if (next === "t") {
+            result += "\t";
+        } else {
+            result += next;
+        }
+    }
+    return result;
 }
 
 function countLines(text, start, end) {

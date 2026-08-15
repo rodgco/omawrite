@@ -178,6 +178,26 @@ void Backend::setVimMode(bool vimMode) {
     emit vimModeChanged();
 }
 
+// A path typed on the : command line, read the way a shell would: ~ is home,
+// and a relative path hangs off the open document's directory.
+QUrl Backend::resolvePath(const QString &path) const {
+    QString candidate = path.trimmed();
+    if (candidate.isEmpty())
+        return {};
+
+    if (candidate == QStringLiteral("~") || candidate.startsWith(QStringLiteral("~/")))
+        candidate.replace(0, 1, QDir::homePath());
+
+    QFileInfo info(candidate);
+    if (info.isRelative()) {
+        const QString base = m_fileUrl.isLocalFile()
+            ? QFileInfo(m_fileUrl.toLocalFile()).absolutePath()
+            : QDir::homePath();
+        info.setFile(QDir(base), candidate);
+    }
+    return QUrl::fromLocalFile(info.absoluteFilePath());
+}
+
 // Vim commands are single edits as far as the writer is concerned, so group
 // the document changes each one makes: u then undoes the command, not the
 // remove-and-insert pair that carried it out.

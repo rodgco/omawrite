@@ -44,8 +44,28 @@ list continuation and Markdown paste all behave as they do with vim mode off.
 - `/` opens the app's find bar, with `n` and `N` for next and previous match.
   `Ctrl+D` and `Ctrl+U` scroll by a page.
 
-Every `Ctrl` shortcut above keeps working in either mode. There is no `:`
-command line — use `Ctrl+S` to save and `Ctrl+O` to open.
+Every `Ctrl` shortcut above keeps working in either mode.
+
+### The `:` command line
+
+`:` opens a command line along the bottom edge. `Enter` runs it; `Esc`, or
+backspacing past the start, abandons it.
+
+- `:w`, `:w <path>`, `:wq`, `:x`, `:q`, `:q!` write and quit. Writing an
+  unsaved document opens the portal picker, and `:q` on a modified one asks
+  before closing, the same as clicking the window's close button.
+- `:e <path>` opens a file, `:e!` reloads the open one from disk. Relative
+  paths hang off the open document's directory, and `~` is your home.
+- `:42`, `:$` jump to a line.
+- `:s/pattern/replacement/`, with `%`, `3`, `2,5` or `'<,'>` in front of it to
+  choose the lines, and `g` (every match on the line) or `i` (ignore case)
+  after it. `&` stands for the whole match and `\1` for a capture group, and
+  any punctuation can stand in for `/` as the separator. Patterns are
+  JavaScript regular expressions, not vim's.
+- `:d` deletes the lines in the range, into the same register `p` pastes from.
+- `:noh` clears the search highlight.
+
+`u` undoes a whole `:s` or `:d` in one step.
 
 Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
 and warns before an external change can replace local work.
