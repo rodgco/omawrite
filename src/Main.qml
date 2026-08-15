@@ -297,6 +297,16 @@ ApplicationWindow {
                 win.completePendingAction();
         }
 
+        // Vim opens a file on its first line, so put the caret there instead of
+        // leaving it wherever replacing the text dropped it, which is the end
+        // of the document and reads as a caret adrift below the last line.
+        function onDocumentLoaded() {
+            if (!win.vimMode)
+                return;
+            editor.cursorPosition = 0;
+            editor.resetVim();
+        }
+
         function onExternalChangeDetected(deleted, locallyModified) {
             externalChangeDialog.deleted = deleted;
             externalChangeDialog.locallyModified = locallyModified;

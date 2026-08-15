@@ -95,6 +95,7 @@ signals:
     void openDialogRequested();
     void saveDialogRequested(const QUrl &suggestedUrl);
     void saveSucceeded();
+    void documentLoaded();
     void externalChangeDetected(bool deleted, bool locallyModified);
 
 private:

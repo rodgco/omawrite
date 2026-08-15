@@ -489,6 +489,9 @@ void Backend::loadDocumentText(const QString &text) {
     applyDocumentTypography();
     m_wordCountTimer.stop();
     setWordCount(countWords(text));
+    // Replacing the document leaves the editor's caret wherever the new text
+    // ends; tell the interface so it can decide where the caret belongs.
+    emit documentLoaded();
 }
 
 void Backend::setFileUrl(const QUrl &url) {

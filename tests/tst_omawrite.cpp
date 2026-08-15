@@ -527,9 +527,50 @@ private slots:
         QVERIFY(editor->property("text").toString().contains(QStringLiteral(":")));
     }
 
+    void startsAtTheTopOfAnOpenedDocument() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("opened.md"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.write("# Title\n\nA paragraph of prose.\n\nAnother one.\n");
+        file.close();
+
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        backend.setVimMode(true);
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        // Opening a document leaves the caret on its first character, where
+        // vim starts, rather than adrift on the trailing empty line.
+        backend.open(QUrl::fromLocalFile(path));
+        QCOMPARE(editor->property("text").toString().left(7), QStringLiteral("# Title"));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
+
+        // Reloading from disk does the same.
+        editor->setProperty("cursorPosition", 12);
+        backend.reloadFromDisk();
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+
+        backend.setVimMode(false);
+    }
+
     void remembersVimModePreference() {
         Backend backend;
-        QVERIFY(!backend.vimMode());
+        backend.setVimMode(false);
 
         QSignalSpy vimModeSpy(&backend, &Backend::vimModeChanged);
         backend.setVimMode(true);
@@ -538,6 +579,9 @@ private slots:
         Backend restored;
         QVERIFY(restored.vimMode());
         restored.setVimMode(false);
+
+        Backend cleared;
+        QVERIFY(!cleared.vimMode());
     }
 
     void savesAndOpensFromFooterButtons() {
