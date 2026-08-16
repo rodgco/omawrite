@@ -54,7 +54,7 @@ public:
     QString themeAccent() const { return m_themeAccent; }
     QString themeSelection() const { return m_themeSelection; }
     static int countWords(const QString &text);
-    static QString normalizedLinkUrl(const QString &clipboardText);
+    Q_INVOKABLE static QString normalizedLinkUrl(const QString &clipboardText);
     static QString suggestedFileName(const QString &text);
 
     Q_INVOKABLE void attachDocument(QObject *textDocument);
@@ -80,6 +80,10 @@ public:
     Q_INVOKABLE QUrl resolvePath(const QString &path) const;
     Q_INVOKABLE void beginEditBlock();
     Q_INVOKABLE void endEditBlock();
+    // The document as it stands this instant. TextEdit caches its text and
+    // refreshes it when the document emits a change, which an open edit block
+    // holds back, so a command partway through its own edits must ask here.
+    Q_INVOKABLE QString documentText() const { return currentDocumentText(); }
     Q_INVOKABLE QVariantMap windowGeometry() const;
     Q_INVOKABLE void saveWindowGeometry(int x, int y, int width, int height, bool maximized);
 

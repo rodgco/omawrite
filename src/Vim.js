@@ -46,16 +46,26 @@ function statusText(state) {
 // can drive a bare TextEdit while Main.qml adds the application hooks.
 function createHost(editor, hooks) {
     hooks = hooks || {};
+
+    // Everything that needs the document goes through here, never through
+    // editor.text: partway through a command's own edits the editor's copy
+    // still lags the document, and clamping a position against the short
+    // version drags the caret back to where the edit started.
+    function currentText() {
+        return hooks.text ? hooks.text() : editor.text;
+    }
+
     return {
-        text: function() { return editor.text; },
+        text: currentText,
         cursor: function() { return editor.cursorPosition; },
         setCursor: function(position) {
             editor.deselect();
-            editor.cursorPosition = clamp(editor.text, position);
+            editor.cursorPosition = clamp(currentText(), position);
         },
         select: function(from, to) {
-            editor.cursorPosition = clamp(editor.text, from);
-            editor.moveCursorSelection(clamp(editor.text, to));
+            var text = currentText();
+            editor.cursorPosition = clamp(text, from);
+            editor.moveCursorSelection(clamp(text, to));
         },
         deselect: function() { editor.deselect(); },
         selection: function() {
@@ -108,6 +118,19 @@ function createHost(editor, hooks) {
         // moving. The application hook skips them the way the arrow keys do.
         settle: function(position, direction) {
             return hooks.settle ? hooks.settle(position, direction) : position;
+        },
+        // Two places where the editor knows more about Markdown than the
+        // grammar does, and the grammar should defer rather than guess: what
+        // a new line beside a list item looks like, and what pasting a URL
+        // over a selection means. Both report where they left things, or
+        // that they did nothing, so the plain behaviour can stand in.
+        openLine: function(below) {
+            return hooks.openLine ? hooks.openLine(below) : -1;
+        },
+        linkPaste: function(start, end, payload, fromClipboard) {
+            return hooks.linkPaste
+                ? hooks.linkPaste(start, end, payload, fromClipboard)
+                : false;
         },
         // "+ and "* reach outside the application, so they are the one pair
         // of registers the engine cannot hold itself.
@@ -622,6 +645,20 @@ function visualLines(state, host) {
             end: lineNumberAt(text, Math.max(state.anchor, state.head))};
 }
 
+// An edit from outside the engine leaves the visual anchors pointing at text
+// that has moved, so drop the selection. The registers and the last change
+// survive: nothing about them went stale.
+function cancelVisual(state) {
+    if (state.mode !== "visual" && state.mode !== "vline")
+        return false;
+
+    state.mode = "normal";
+    state.anchor = -1;
+    state.head = -1;
+    resetPending(state);
+    return true;
+}
+
 function leaveVisual(state, host) {
     var head = state.head;
     state.lastVisual = visualLines(state, host);
@@ -673,7 +710,14 @@ function handleKey(state, host, key) {
 
     host.beginChange();
     var handled = dispatch(state, host, key);
+    // Closing the edit block replays the change to the editor, which remaps
+    // the caret from where it stood when the edit began and so undoes where
+    // the command meant to leave it. Put it back, but never while a visual
+    // selection is up, since moving the caret would drop it.
+    var intended = host.cursor();
     host.endChange();
+    if (state.mode !== "visual" && state.mode !== "vline" && host.cursor() !== intended)
+        host.setCursor(intended);
     return handled;
 }
 
@@ -1251,6 +1295,14 @@ function joinLines(state, host, count) {
 }
 
 function openLine(state, host, below) {
+    // The editor opens the line if it can, so a list item or a quote carries
+    // its marker down the way it does when Return is pressed in insert mode.
+    var opened = host.openLine(below);
+    if (opened >= 0) {
+        enterInsert(state, host, opened);
+        return;
+    }
+
     var text = host.text();
     var position = host.cursor();
     if (below) {
@@ -1393,11 +1445,22 @@ function simpleCommand(state, host, key) {
             // Read before the delete, which writes the replaced text to the
             // unnamed register the way vim does.
             var incoming = readRegister(state, host, state.pendingRegister);
+            var fromClipboard = isClipboardRegister(state.pendingRegister);
             state.mode = "normal";
             state.anchor = -1;
             state.head = -1;
             state.pendingRegister = "";
             host.deselect();
+
+            // A URL pasted over a selection is a Markdown link, which is what
+            // Ctrl+V does here too. p defers to the editor for that; P stays
+            // the literal paste, and a count means the run was meant as text.
+            if (key === "p" && count === 1 && !incoming.linewise
+                    && host.linkPaste(range.start, range.end, incoming.text, fromClipboard)) {
+                resetPending(state);
+                return true;
+            }
+
             applyOperator(state, host, "d", range.start, range.end, range.linewise);
             state.register = incoming;
             paste(state, host, false, count);

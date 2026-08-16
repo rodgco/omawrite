@@ -614,13 +614,42 @@ ApplicationWindow {
                 onCursorRectangleChanged: editorFlick.ensureCursorVisible()
 
                 property var vimState: Vim.createState()
+                // How many of the engine's edit blocks are open. While any is,
+                // the editor's own text property lags the document.
+                property int vimEditDepth: 0
+
                 property var vimHost: Vim.createHost(editor, {
-                    beginChange: function() { backend.beginEditBlock(); },
-                    endChange: function() { backend.endEditBlock(); },
+                    text: function() {
+                        return editor.vimEditDepth > 0 ? backend.documentText() : editor.text;
+                    },
+                    beginChange: function() {
+                        editor.vimEditDepth++;
+                        backend.beginEditBlock();
+                    },
+                    endChange: function() {
+                        backend.endEditBlock();
+                        editor.vimEditDepth = Math.max(0, editor.vimEditDepth - 1);
+                    },
                     settle: function(position, direction) {
                         return direction >= 0
                             ? editor.skipHiddenForward(position)
                             : editor.skipHiddenBackward(position);
+                    },
+                    openLine: function(below) {
+                        return editor.openLineForVim(below);
+                    },
+                    linkPaste: function(start, end, payload, fromClipboard) {
+                        editor.select(start, end);
+                        var wrapped = editor.pasteUrlAsMarkdownLink(
+                            fromClipboard ? undefined : payload);
+                        if (!wrapped) {
+                            editor.deselect();
+                            return false;
+                        }
+                        // The replacement leaves the caret past the link, and
+                        // normal mode sits on a character rather than after it.
+                        editor.cursorPosition = Math.max(start, editor.cursorPosition - 1);
+                        return true;
                     },
                     clipboard: function(selection) {
                         return backend.clipboardText(selection);
@@ -776,20 +805,52 @@ ApplicationWindow {
                         replaceSelectionWith("\n");
                         return;
                     }
-                    var match = line.match(/^(\s*)([-+*]|\d+[.)]|>+)\s+(.*)$/);
+                    var match = line.match(listMarkerPattern);
                     if (match) {
-                        if (match[3].length === 0) {
+                        if (match[3].length === 0)
                             EditorMutations.replaceRange(editor, lineStart,
                                                          cursorPosition, "\n");
-                        } else {
-                            var marker = match[2];
-                            if (/^\d/.test(marker))
-                                marker = (parseInt(marker) + 1) + marker.slice(-1);
-                            replaceSelectionWith("\n" + match[1] + marker + " ");
-                        }
+                        else
+                            replaceSelectionWith("\n" + continuationMarker(line, true));
                         return;
                     }
                     replaceSelectionWith("\n\n");
+                }
+
+                readonly property var listMarkerPattern: /^(\s*)([-+*]|\d+[.)]|>+)\s+(.*)$/
+
+                // The bullet, number or quote a new line beside this one should
+                // carry, so the list keeps going. Numbers count on downwards,
+                // but a line opened above keeps the number that was there.
+                function continuationMarker(line, advance) {
+                    var match = line.match(listMarkerPattern);
+                    if (!match || match[3].length === 0)
+                        return "";
+
+                    var marker = match[2];
+                    if (advance && /^\d/.test(marker))
+                        marker = (parseInt(marker) + 1) + marker.slice(-1);
+                    return match[1] + marker + " ";
+                }
+
+                // Where vim's o and O go through the editor's own idea of a new
+                // line, so a list item or a quote carries its marker the way it
+                // does when you press Return. Returns where insert should start.
+                function openLineForVim(below) {
+                    var start = text.lastIndexOf("\n", cursorPosition - 1) + 1;
+                    var end = text.indexOf("\n", cursorPosition);
+                    if (end < 0)
+                        end = text.length;
+
+                    if (below) {
+                        cursorPosition = end;
+                        smartReturn(false);
+                        return cursorPosition;
+                    }
+
+                    var marker = continuationMarker(text.slice(start, end), false);
+                    EditorMutations.replaceRange(editor, start, start, marker + "\n");
+                    return start + marker.length;
                 }
 
                 function escapeMarkdownLinkText(linkText) {
@@ -805,12 +866,21 @@ ApplicationWindow {
                 }
 
                 function pasteClipboardUrlAsMarkdownLink() {
+                    return pasteUrlAsMarkdownLink(undefined);
+                }
+
+                // Wrap the selection as a Markdown link. With no payload the
+                // URL comes from the clipboard, which carries a uri-list its
+                // plain text does not; vim's registers hand theirs over.
+                function pasteUrlAsMarkdownLink(payload) {
                     var start = Math.min(selectionStart, selectionEnd);
                     var end = Math.max(selectionStart, selectionEnd);
                     if (start === end)
                         return false;
 
-                    var url = backend.clipboardUrl();
+                    var url = payload === undefined
+                        ? backend.clipboardUrl()
+                        : backend.normalizedLinkUrl(payload);
                     if (url === "")
                         return false;
 
@@ -948,14 +1018,17 @@ ApplicationWindow {
                 }
 
                 onTextChanged: {
-                    // Edits from outside the vim engine, like the formatting
-                    // shortcuts, invalidate a visual selection's anchors.
-                    if (backend.vimMode
-                            && (vim.mode === "visual" || vim.mode === "visualLine"))
-                        vim.reset();
                     if (win.searchUpdating)
                         return;
+                    // Closing one of vim's edit blocks makes the document
+                    // announce itself whether or not anything changed, so
+                    // every keystroke arrives here. Only a real edit counts.
                     var contentChanged = backend.editorTextChanged();
+                    // An edit from outside the engine, like the formatting
+                    // shortcuts, leaves a visual selection's anchors pointing
+                    // at text that has since moved.
+                    if (contentChanged && win.vimMode && Vim.cancelVisual(vimState))
+                        publishVimStatus();
                     if (win.searchOpen && contentChanged)
                         win.updateSearch();
                 }

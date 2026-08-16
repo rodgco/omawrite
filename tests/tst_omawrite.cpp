@@ -633,6 +633,121 @@ private slots:
         QCOMPARE(editor->property("text").toString(), QStringLiteral("dxbeta"));
     }
 
+    // o, O and a visual p go through the editor's own Markdown handling
+    // rather than reimplementing it inside the vim engine.
+    void reusesTheEditorsMarkdownBehaviour() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        backend.setVimMode(true);
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        auto text = [&] { return editor->property("text").toString(); };
+        auto esc = [&] { QTest::keyClick(window, Qt::Key_Escape); };
+        auto load = [&](const QString &content, int position) {
+            esc();
+            editor->setProperty("text", content);
+            editor->setProperty("cursorPosition", position);
+        };
+
+        // Where a command leaves the caret survives the edit block closing.
+        load(QStringLiteral("one\ntwo\nthree"), 0);
+        typeInto(window, QStringLiteral("jdd"));
+        QCOMPARE(text(), QStringLiteral("one\nthree"));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 4);
+
+        // Commands that edit more than once read the document as they go, not
+        // the editor's cache, which an open edit block leaves behind.
+        load(QStringLiteral("one\ntwo\nthree"), 0);
+        typeInto(window, QStringLiteral("3J"));
+        QCOMPARE(text(), QStringLiteral("one two three"));
+
+        load(QStringLiteral("one\ntwo"), 0);
+        typeInto(window, QStringLiteral("yyp"));
+        QCOMPARE(text(), QStringLiteral("one\none\ntwo"));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 4);
+
+        // o carries a bullet down the way Return does in insert mode.
+        load(QStringLiteral("- item"), 3);
+        typeInto(window, QStringLiteral("o"));
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("INSERT"));
+        QCOMPARE(text(), QStringLiteral("- item\n- "));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 9);
+        typeInto(window, QStringLiteral("next"));
+        QCOMPARE(text(), QStringLiteral("- item\n- next"));
+
+        // Numbers count on downwards; a line opened above keeps its number.
+        load(QStringLiteral("2. second"), 3);
+        typeInto(window, QStringLiteral("o"));
+        QCOMPARE(text(), QStringLiteral("2. second\n3. "));
+
+        load(QStringLiteral("2. second"), 3);
+        typeInto(window, QStringLiteral("O"));
+        QCOMPARE(text(), QStringLiteral("2. \n2. second"));
+
+        // A quote continues, and a plain paragraph opens a blank line between,
+        // which is what Return does in this editor.
+        load(QStringLiteral("> quoted"), 3);
+        typeInto(window, QStringLiteral("o"));
+        QCOMPARE(text(), QStringLiteral("> quoted\n> "));
+
+        load(QStringLiteral("plain"), 2);
+        typeInto(window, QStringLiteral("o"));
+        QCOMPARE(text(), QStringLiteral("plain\n\n"));
+
+        // A URL pasted over a visual selection becomes a Markdown link, the
+        // same as Ctrl+V does.
+        backend.setClipboardText(QStringLiteral("https://example.com"));
+        load(QStringLiteral("read the docs here"), 9);
+        typeInto(window, QStringLiteral("ve"));
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("VISUAL"));
+        QCOMPARE(editor->property("selectionStart").toInt(), 9);
+        QCOMPARE(editor->property("selectionEnd").toInt(), 13);
+        typeInto(window, QStringLiteral("\"+"));
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("VISUAL \"+"));
+        typeInto(window, QStringLiteral("p"));
+        QCOMPARE(text(), QStringLiteral("read the [docs](https://example.com) here"));
+
+        // P is the literal paste, so there is a way to mean the text itself.
+        load(QStringLiteral("read the docs here"), 9);
+        typeInto(window, QStringLiteral("ve\"+P"));
+        QCOMPARE(text(), QStringLiteral("read the https://example.com here"));
+
+        // Anything that is not a URL pastes as text either way.
+        backend.setClipboardText(QStringLiteral("manual"));
+        load(QStringLiteral("read the docs here"), 9);
+        typeInto(window, QStringLiteral("ve\"+p"));
+        QCOMPARE(text(), QStringLiteral("read the manual here"));
+
+        // A URL yanked into a register links the same as a copied one, with
+        // the clipboard empty to prove the register is what is being read.
+        backend.setClipboardText(QString());
+        load(QStringLiteral("https://example.org\nread the docs here"), 0);
+        typeInto(window, QStringLiteral("\"ay$"));
+        editor->setProperty("cursorPosition", 29);
+        typeInto(window, QStringLiteral("ve\"ap"));
+        QCOMPARE(text(),
+                 QStringLiteral("https://example.org\nread the [docs](https://example.org) here"));
+
+        // One undo takes the whole link back, not the delete and the insert
+        // of it separately.
+        typeInto(window, QStringLiteral("u"));
+        QCOMPARE(text(), QStringLiteral("https://example.org\nread the docs here"));
+    }
+
     void walksDisplayLinesWithJAndK() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
