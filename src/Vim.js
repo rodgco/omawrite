@@ -843,9 +843,17 @@ function argument(state, host, key) {
         if (key.length === 1) {
             if (state.mode === "visual" || state.mode === "vline") {
                 var range = selectionRange(state, host);
+                var text = host.text();
+                var from = range.start;
+                var to = range.end;
+                // A linewise range carries the anchors rather than the lines
+                // they sit on, and V-LINE r covers those lines whole.
+                if (range.linewise) {
+                    from = lineStart(text, from);
+                    to = lineEnd(text, to);
+                }
                 leaveVisual(state, host);
-                host.setCursor(range.start);
-                replaceCharacters(state, host, key, range.end - range.start);
+                replaceSelection(state, host, key, from, to);
             } else {
                 replaceCharacters(state, host, key, effectiveCount(state));
             }
@@ -1262,6 +1270,21 @@ function replaceCharacters(state, host, character, count) {
     host.replace(position, end, replacement);
     var updated = host.text();
     host.setCursor(clampNormal(updated, stepBackward(updated, position + replacement.length, 1)));
+    commitChange(state);
+}
+
+// r over a visual selection replaces every character in it, one for one, and
+// leaves the line breaks alone so the shape of the selection survives.
+function replaceSelection(state, host, character, start, end) {
+    var text = host.text();
+    var replacement = "";
+    for (var i = start; i < end; i = stepForward(text, i, 1))
+        replacement += text.charAt(i) === "\n" ? "\n" : character;
+    if (replacement === "")
+        return;
+
+    host.replace(start, end, replacement);
+    host.setCursor(clampNormal(host.text(), start));
     commitChange(state);
 }
 

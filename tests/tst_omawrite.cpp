@@ -384,6 +384,19 @@ private slots:
         QMetaObject::invokeMethod(editor.data(), "feed", Q_ARG(QVariant, QStringLiteral("d")));
         QCOMPARE(editor->property("text").toString(), QStringLiteral("beta"));
 
+        // r over a visual selection replaces every character in it and steps
+        // over the line breaks, rather than stopping at the end of the first
+        // line the way the single-line r does.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("abc\ndef"), 0,
+                        QStringLiteral("vjrz")).text, QStringLiteral("zzz\nzef"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("abc\ndef"), 0,
+                        QStringLiteral("Vjrz")).text, QStringLiteral("zzz\nzzz"));
+
+        // One replacement per character, not per UTF-16 unit, so a selection
+        // holding an emoji comes back the same length it went in.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("a\U0001F600b"), 0,
+                        QStringLiteral("vllrz")).text, QStringLiteral("zzz"));
+
         // An object that does not resolve leaves the document alone.
         QCOMPARE(runVim(editor.data(), QStringLiteral("no quotes here"), 3,
                         QStringLiteral("di\"")).text, QStringLiteral("no quotes here"));
