@@ -5,6 +5,7 @@ import QtQuick.Dialogs as Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
 import "EditorMutations.js" as EditorMutations
+import "VimEngine.js" as VimEngine
 
 ApplicationWindow {
     id: win
@@ -38,6 +39,8 @@ ApplicationWindow {
     property string pendingAction: ""
     property bool replaceOpen: false
     property bool awaitingPendingSave: false
+    property bool vimCommandOpen: false
+    property string vimMessage: ""
 
     Material.theme: darkMode ? Material.Dark : Material.Light
     Material.accent: backend.themeAccent
@@ -78,6 +81,94 @@ ApplicationWindow {
         id: writerFontMetrics
         font.family: "iA Writer Mono S"
         font.pixelSize: win.editorFontPixelSize
+    }
+
+    // Per-window vim state; the modal grammar itself lives in VimEngine.js.
+    QtObject {
+        id: vim
+        objectName: "vimState"
+        property string mode: "normal"
+        property string pending: ""
+        property string countText: ""
+        property string opCountText: ""
+        property string op: ""
+        property string prefix: ""
+        property string awaitingChar: ""
+        property string lastFindCmd: ""
+        property string lastFindChar: ""
+        property int anchor: 0
+        property int visualPos: 0
+        property int insertStart: 0
+        property real goalX: -1
+        property bool replaying: false
+        property var keyLog: []
+        property var pendingChangeKeys: null
+        property var lastChange: null
+
+        function reset() {
+            VimEngine.resetPending(this);
+            mode = "normal";
+            goalX = -1;
+        }
+    }
+
+    Timer {
+        id: vimMessageTimer
+        interval: 4000
+        onTriggered: win.vimMessage = ""
+    }
+
+    function openVimCommand() {
+        vimMessage = "";
+        vimCommandField.text = "";
+        vimCommandOpen = true;
+        vimCommandField.forceActiveFocus();
+    }
+
+    function closeVimCommand() {
+        vimCommandOpen = false;
+        editor.forceActiveFocus();
+    }
+
+    function openVimSearch() {
+        searchOpen = true;
+        searchField.forceActiveFocus();
+        searchField.selectAll();
+    }
+
+    function vimYank(text) {
+        backend.setClipboardText(text);
+    }
+
+    function vimClipboardText() {
+        return backend.clipboardText();
+    }
+
+    function vimReplace(start, end, replacement) {
+        backend.replaceRange(start, end, replacement);
+    }
+
+    function runVimCommand(command) {
+        closeVimCommand();
+        command = command.trim();
+        if (command === "")
+            return;
+        if (/^\d+$/.test(command)) {
+            editor.cursorPosition = VimEngine.positionOfLine(editor.text,
+                                                             parseInt(command, 10));
+            return;
+        }
+        switch (command) {
+        case "w": backend.save(); break;
+        case "q": close(); break;
+        case "q!": closeConfirmed = true; close(); break;
+        case "wq":
+        case "wq!":
+        case "x": backend.saveForClose(); break;
+        default:
+            vimMessage = "Not an editor command: " + command;
+            vimMessageTimer.restart();
+        }
     }
 
     // Every hardcoded size in the interface is expressed at text scale 1.
@@ -265,6 +356,13 @@ ApplicationWindow {
             externalChangeDialog.locallyModified = locallyModified;
             externalChangeDialog.open();
         }
+
+        function onVimModeChanged() {
+            vim.reset();
+            editor.deselect();
+            win.vimCommandOpen = false;
+            editor.forceActiveFocus();
+        }
     }
 
     Dialogs.FileDialog {
@@ -331,7 +429,7 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         anchors.centerIn: parent
         contentItem: Label {
-            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
+            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts\nVim Mode  Toggle in the bottom-left corner"
             lineHeight: 1.5
         }
     }
@@ -554,11 +652,21 @@ ApplicationWindow {
                 // the compositor delivers the fractional scale after the
                 // first frame). Fall back to Qt's scalable renderer there.
                 renderType: Screen.devicePixelRatio % 1 === 0 ? TextEdit.NativeRendering : TextEdit.QtRendering
+                // A block cursor is the clearest signal the editor is in a
+                // vim command mode; insert mode keeps the familiar beam.
+                readonly property bool blockCursor: backend.vimMode && vim.mode !== "insert"
                 cursorDelegate: Rectangle {
-                    width: 1
+                    width: editor.blockCursor
+                        ? Math.max(2, Math.round(writerFontMetrics.averageCharacterWidth))
+                        : 1
                     color: win.strongTextColor
+                    opacity: editor.blockCursor ? 0.55 : 1
                 }
                 onCursorRectangleChanged: editorFlick.ensureCursorVisible()
+                onActiveFocusChanged: {
+                    if (activeFocus && win.vimCommandOpen)
+                        win.vimCommandOpen = false;
+                }
 
                 function replaceSelectionWith(replacement) {
                     var start = Math.min(selectionStart, selectionEnd);
@@ -733,6 +841,11 @@ ApplicationWindow {
 
                 Keys.priority: Keys.BeforeItem
                 Keys.onPressed: function(event) {
+                    if (backend.vimMode && VimEngine.handleKey(vim, editor, win, event)) {
+                        event.accepted = true;
+                        return;
+                    }
+
                     var pasteKey = (event.key === Qt.Key_V)
                         && (event.modifiers & Qt.ControlModifier)
                         && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier | Qt.ShiftModifier));
@@ -771,6 +884,11 @@ ApplicationWindow {
                 }
 
                 onTextChanged: {
+                    // Edits from outside the vim engine, like the formatting
+                    // shortcuts, invalidate a visual selection's anchors.
+                    if (backend.vimMode
+                            && (vim.mode === "visual" || vim.mode === "visualLine"))
+                        vim.reset();
                     if (win.searchUpdating)
                         return;
                     var contentChanged = backend.editorTextChanged();
@@ -804,6 +922,7 @@ ApplicationWindow {
             anchors.bottomMargin: 10
             spacing: 12
             opacity: 0.55
+            visible: !win.vimCommandOpen
 
             FooterIconButton {
                 objectName: "saveButton"
@@ -821,6 +940,35 @@ ApplicationWindow {
                 onClicked: backend.openDialog()
             }
 
+            FooterIconButton {
+                objectName: "vimButton"
+                iconName: "vim"
+                iconColor: backend.vimMode ? backend.themeAccent : win.mutedColor
+                tooltip: backend.vimMode ? "Vim mode on" : "Vim mode off"
+                onClicked: backend.vimMode = !backend.vimMode
+            }
+
+            Label {
+                objectName: "vimModeLabel"
+                visible: backend.vimMode
+                text: {
+                    if (win.vimMessage !== "")
+                        return win.vimMessage;
+                    var names = { normal: "NORMAL", insert: "INSERT",
+                                  visual: "VISUAL", visualLine: "V-LINE" };
+                    return vim.pending !== ""
+                        ? names[vim.mode] + " " + vim.pending
+                        : names[vim.mode];
+                }
+                color: backend.vimMode && vim.mode === "insert"
+                    ? backend.themeAccent
+                    : win.mutedColor
+                font.family: "iA Writer Mono S"
+                font.pixelSize: win.scaledSize(11)
+                height: win.scaledSize(16)
+                verticalAlignment: Text.AlignVCenter
+            }
+
             Label {
                 text: backend.status
                 color: win.mutedColor
@@ -831,6 +979,42 @@ ApplicationWindow {
                 width: Math.min(360, win.width / 3)
                 height: win.scaledSize(16)
                 verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+        Row {
+            id: vimCommandRow
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: 12
+            anchors.bottomMargin: 10
+            visible: win.vimCommandOpen
+
+            Label {
+                text: ":"
+                color: win.textColor
+                font.family: "iA Writer Mono S"
+                font.pixelSize: win.scaledSize(13)
+            }
+
+            TextInput {
+                id: vimCommandField
+                objectName: "vimCommandField"
+                width: Math.min(320, win.width / 3)
+                color: win.textColor
+                selectionColor: win.selectionFill
+                selectedTextColor: win.strongTextColor
+                font.family: "iA Writer Mono S"
+                font.pixelSize: win.scaledSize(13)
+                Keys.onReturnPressed: win.runVimCommand(text)
+                Keys.onEscapePressed: win.closeVimCommand()
+                Keys.onPressed: function(event) {
+                    // An empty backspace dismisses the line, like vim.
+                    if (event.key === Qt.Key_Backspace && text === "") {
+                        win.closeVimCommand();
+                        event.accepted = true;
+                    }
+                }
             }
         }
 

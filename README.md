@@ -24,6 +24,20 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 - `Ctrl+B`, `Ctrl+I`, and `Ctrl+K` insert bold, italic, and link Markdown.
 - `Ctrl+?` shows the keyboard shortcut reference.
 
+## Vim mode
+
+The diamond in the bottom-left corner toggles vim keybindings, and the choice
+sticks across launches. The footer shows the current mode: NORMAL, INSERT,
+VISUAL, or V-LINE, with a block cursor everywhere but insert mode.
+
+The prose-sized subset of vim is supported: motions (`h j k l w b e ge 0 ^ $
+gg G { } ( ) f t F T ; ,` and counts), operators (`d c y` with motions and
+text objects like `iw`, `ip`, `i"`, `i(`), the usual shorthands (`x D C Y s S
+J ~ r p P u .`), visual selections (`v V`), and an ex command line for `:w`,
+`:q`, `:wq`, `:q!`, and `:{line}`. `/` opens search; `n` and `N` walk the
+matches. `j` and `k` move by display line, so wrapped paragraphs read the way
+they scroll, and words include apostrophes so contractions travel whole.
+
 Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
 and warns before an external change can replace local work.
 

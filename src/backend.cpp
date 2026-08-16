@@ -117,6 +117,8 @@ Backend::Backend(QObject *parent) : QObject(parent) {
                 emit externalChangeDetected(deleted, m_modified);
             });
 
+    m_vimMode = QSettings().value(QStringLiteral("editor/vimMode"), false).toBool();
+
     loadOmarchyTheme();
     watchOmarchyTheme();
     connect(&m_themeWatcher, &QFileSystemWatcher::fileChanged, this, [this]() {
@@ -156,6 +158,15 @@ void Backend::setDarkMode(bool darkMode) {
     m_darkMode = darkMode;
     loadOmarchyTheme();
     emit darkModeChanged();
+}
+
+void Backend::setVimMode(bool vimMode) {
+    if (m_vimMode == vimMode)
+        return;
+
+    m_vimMode = vimMode;
+    QSettings().setValue(QStringLiteral("editor/vimMode"), vimMode);
+    emit vimModeChanged();
 }
 
 void Backend::setTextScale(qreal textScale) {
@@ -336,6 +347,26 @@ QString Backend::clipboardText() const {
 
     const QMimeData *mimeData = clipboard->mimeData();
     return mimeData && mimeData->hasText() ? mimeData->text() : QString();
+}
+
+void Backend::setClipboardText(const QString &text) const {
+    if (QClipboard *clipboard = QGuiApplication::clipboard())
+        clipboard->setText(text);
+}
+
+// Replace a range as one edit block, so a single undo reverts the whole
+// change instead of leaving the removal behind.
+void Backend::replaceRange(int start, int end, const QString &replacement) {
+    if (!m_document)
+        return;
+
+    const int lastPosition = qMax(0, m_document->characterCount() - 1);
+    QTextCursor cursor(m_document);
+    cursor.beginEditBlock();
+    cursor.setPosition(qBound(0, start, lastPosition));
+    cursor.setPosition(qBound(0, end, lastPosition), QTextCursor::KeepAnchor);
+    cursor.insertText(replacement);
+    cursor.endEditBlock();
 }
 
 bool Backend::editorTextChanged() {

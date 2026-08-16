@@ -23,6 +23,7 @@ class Backend : public QObject {
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(int wordCount READ wordCount NOTIFY wordCountChanged)
     Q_PROPERTY(bool darkMode READ darkMode WRITE setDarkMode NOTIFY darkModeChanged)
+    Q_PROPERTY(bool vimMode READ vimMode WRITE setVimMode NOTIFY vimModeChanged)
     Q_PROPERTY(qreal textScale READ textScale WRITE setTextScale NOTIFY textScaleChanged)
     Q_PROPERTY(QString themeBackground READ themeBackground NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeForeground READ themeForeground NOTIFY themeColorsChanged)
@@ -43,6 +44,8 @@ public:
     int wordCount() const { return m_wordCount; }
     bool darkMode() const { return m_darkMode; }
     void setDarkMode(bool darkMode);
+    bool vimMode() const { return m_vimMode; }
+    void setVimMode(bool vimMode);
     qreal textScale() const { return m_textScale; }
     void setTextScale(qreal textScale);
     QString themeBackground() const { return m_themeBackground; }
@@ -68,6 +71,8 @@ public:
     Q_INVOKABLE void newWindow();
     Q_INVOKABLE QString clipboardUrl() const;
     Q_INVOKABLE QString clipboardText() const;
+    Q_INVOKABLE void setClipboardText(const QString &text) const;
+    Q_INVOKABLE void replaceRange(int start, int end, const QString &replacement);
     Q_INVOKABLE bool editorTextChanged();
     Q_INVOKABLE QVariantList hiddenRangesAt(int position) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
@@ -81,6 +86,7 @@ signals:
     void statusChanged();
     void wordCountChanged();
     void darkModeChanged();
+    void vimModeChanged();
     void textScaleChanged();
     void themeColorsChanged();
     void closeAfterSave();
@@ -116,6 +122,7 @@ private:
     QString m_status;
     int m_wordCount = 0;
     bool m_darkMode = true;
+    bool m_vimMode = false;
     qreal m_textScale = 1.0;
     bool m_loading = false;
     bool m_closeAfterSave = false;
