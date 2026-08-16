@@ -27,10 +27,11 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 
 ## Vim mode
 
-`Ctrl+Alt+V` toggles vim key bindings, and the choice is remembered between
-sessions. The current mode sits in the bottom-left corner, and normal mode
-draws the caret as a block. Insert mode is the plain editor: smart returns,
-list continuation and Markdown paste all behave as they do with vim mode off.
+The diamond in the bottom-left corner, or `Ctrl+Alt+V`, toggles vim key
+bindings, and the choice is remembered between sessions. The current mode sits
+in the bottom-left corner, and normal mode draws the caret as a block. Insert
+mode is the plain editor: smart returns, list continuation and Markdown paste
+all behave as they do with vim mode off.
 
 - Modes: `i` `I` `a` `A` `o` `O` to insert, `v` and `V` to select, `Esc` to
   return to normal.

@@ -312,6 +312,7 @@ ApplicationWindow {
             externalChangeDialog.locallyModified = locallyModified;
             externalChangeDialog.open();
         }
+
     }
 
     Dialogs.FileDialog {
@@ -939,6 +940,11 @@ ApplicationWindow {
                 }
 
                 onTextChanged: {
+                    // Edits from outside the vim engine, like the formatting
+                    // shortcuts, invalidate a visual selection's anchors.
+                    if (backend.vimMode
+                            && (vim.mode === "visual" || vim.mode === "visualLine"))
+                        vim.reset();
                     if (win.searchUpdating)
                         return;
                     var contentChanged = backend.editorTextChanged();
@@ -993,6 +999,14 @@ ApplicationWindow {
                 iconColor: win.mutedColor
                 tooltip: "Open"
                 onClicked: backend.openDialog()
+            }
+
+            FooterIconButton {
+                objectName: "vimButton"
+                iconName: "vim"
+                iconColor: backend.vimMode ? backend.themeAccent : win.mutedColor
+                tooltip: backend.vimMode ? "Vim mode on" : "Vim mode off"
+                onClicked: backend.vimMode = !backend.vimMode
             }
 
             Label {
