@@ -191,6 +191,27 @@ private slots:
         QCOMPARE(runVim(editor.data(), QStringLiteral("hello there"), 10,
                         QStringLiteral("Fh")).cursor, 7);
 
+        // A repeated t walks on instead of re-finding the target it already
+        // stopped short of, while a fresh t does stop short of an adjacent one.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("a.b.c.d"), 0,
+                        QStringLiteral("t.")).cursor, 0);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("a.b.c.d"), 0,
+                        QStringLiteral("t.;")).cursor, 2);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("a.b.c.d"), 0,
+                        QStringLiteral("t.;;")).cursor, 4);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("a.b.c.d"), 0,
+                        QStringLiteral("f.;")).cursor, 3);
+
+        // Astral characters step and delete whole, never half a pair.
+        const QString emoji = QStringLiteral("a\U0001F600b");
+        QCOMPARE(runVim(editor.data(), emoji, 0, QStringLiteral("l")).cursor, 1);
+        QCOMPARE(runVim(editor.data(), emoji, 0, QStringLiteral("ll")).cursor, 3);
+        QCOMPARE(runVim(editor.data(), emoji, 3, QStringLiteral("h")).cursor, 1);
+        QCOMPARE(runVim(editor.data(), emoji, 1, QStringLiteral("x")).text,
+                 QStringLiteral("ab"));
+        QCOMPARE(runVim(editor.data(), emoji, 1, QStringLiteral("rz")).text,
+                 QStringLiteral("azb"));
+
         // j and k hold the column they started from across a short line.
         QCOMPARE(runVim(editor.data(), QStringLiteral("abcdef\nx\nabcdef"), 4,
                         QStringLiteral("jj")).cursor, 13);

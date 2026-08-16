@@ -95,6 +95,33 @@ function clamp(text, position) {
     return Math.max(0, Math.min(text.length, position));
 }
 
+// Characters outside the basic plane take two UTF-16 units, so a single
+// column step has to move over both or an emoji comes apart.
+function stepForward(text, position, count) {
+    var i = clamp(text, position);
+    while (count-- > 0 && i < text.length) {
+        var code = text.charCodeAt(i);
+        i += (code >= 0xD800 && code <= 0xDBFF && i + 1 < text.length) ? 2 : 1;
+    }
+    return i;
+}
+
+function stepBackward(text, position, count) {
+    var i = clamp(text, position);
+    while (count-- > 0 && i > 0) {
+        var code = text.charCodeAt(i - 1);
+        i -= (code >= 0xDC00 && code <= 0xDFFF && i >= 2) ? 2 : 1;
+    }
+    return i;
+}
+
+function characterCount(text, start, end) {
+    var characters = 0;
+    for (var i = start; i < end; i = stepForward(text, i, 1))
+        characters++;
+    return characters;
+}
+
 function lineStart(text, position) {
     if (position <= 0)
         return 0;
@@ -145,7 +172,9 @@ function clampNormal(text, position) {
     position = clamp(text, position);
     var start = lineStart(text, position);
     var end = lineEnd(text, position);
-    return position > start && position >= end ? end - 1 : position;
+    return position > start && position >= end
+        ? Math.max(start, stepBackward(text, end, 1))
+        : position;
 }
 
 // 0 blank, 1 punctuation, 2 word. W and B treat every non-blank alike.
@@ -269,18 +298,25 @@ function sentenceBackward(text, position) {
     return Math.max(0, from);
 }
 
-function findInLine(text, position, command, character, count) {
+function findInLine(text, position, command, character, count, repeated) {
     var forward = command === "f" || command === "t";
     var start = lineStart(text, position);
     var end = lineEnd(text, position);
     var i = position;
     for (var found = 0; found < count; found++) {
+        var from = forward ? i + 1 : i - 1;
+        // A repeated t or T already sits one short of its target, so it would
+        // find the same one again and stand still. A fresh press would not.
+        if (repeated && command === "t" && text.charAt(from) === character)
+            from = i + 2;
+        else if (repeated && command === "T" && text.charAt(from) === character)
+            from = i - 2;
         if (forward) {
-            i = text.indexOf(character, i + 1);
+            i = text.indexOf(character, from);
             if (i < 0 || i >= end)
                 return -1;
         } else {
-            i = text.lastIndexOf(character, i - 1);
+            i = text.lastIndexOf(character, from);
             if (i < 0 || i < start)
                 return -1;
         }
@@ -493,7 +529,7 @@ function leaveInsert(state, host) {
     if (session && !state.replaying)
         state.lastChange = {keys: session.keys,
                             insert: insertDelta(session.text, host.text(), session.start)};
-    host.setCursor(clampNormal(host.text(), host.cursor() - 1));
+    stepBackOntoLastCharacter(host);
     resetPending(state);
 }
 
@@ -512,6 +548,18 @@ function insertDelta(before, after, start) {
         suffix++;
     return {back: Math.max(0, Math.min(start, start - prefix)),
             text: after.slice(prefix, after.length - suffix)};
+}
+
+// Leaving insert puts the caret back on the last character typed, which is
+// where normal mode expects it. At column zero there is nothing to step back
+// onto, and the caret stays rather than jumping to the line above.
+function stepBackOntoLastCharacter(host) {
+    var text = host.text();
+    var position = host.cursor();
+    var start = lineStart(text, position);
+    host.setCursor(clampNormal(text, position > start
+        ? Math.max(start, stepBackward(text, position, 1))
+        : position));
 }
 
 function enterVisual(state, host, mode) {
@@ -803,11 +851,13 @@ function evaluateMotion(state, host, key, count) {
     case "h":
     case "Left":
     case "Backspace":
-        return {position: Math.max(lineStart(text, position), position - count)};
+        return {position: Math.max(lineStart(text, position),
+                                   stepBackward(text, position, count))};
     case "l":
     case "Right":
     case " ":
-        return {position: Math.min(lineEnd(text, position), position + count)};
+        return {position: Math.min(lineEnd(text, position),
+                                   stepForward(text, position, count))};
     case "j":
     case "Down":
     case "Return":
@@ -877,7 +927,7 @@ function evaluateMotion(state, host, key, count) {
         var command = state.lastFind.command;
         if (key === ",")
             command = {f: "F", F: "f", t: "T", T: "t"}[command];
-        var found = findInLine(text, position, command, state.lastFind.character, count);
+        var found = findInLine(text, position, command, state.lastFind.character, count, true);
         if (found < 0)
             return null;
         return {position: found, inclusive: command === "f" || command === "t"};
@@ -984,9 +1034,12 @@ function paste(state, host, after, count) {
             host.setCursor(firstNonBlank(host.text(), at));
         }
     } else {
-        var target = after ? Math.min(lineEnd(text, position), position + 1) : position;
+        var target = after
+            ? Math.min(lineEnd(text, position), stepForward(text, position, 1))
+            : position;
         host.replace(target, target, payload);
-        host.setCursor(clampNormal(host.text(), target + payload.length - 1));
+        var pasted = host.text();
+        host.setCursor(clampNormal(pasted, stepBackward(pasted, target + payload.length, 1)));
     }
     commitChange(state);
 }
@@ -994,8 +1047,12 @@ function paste(state, host, after, count) {
 function deleteCharacters(state, host, forward, count) {
     var text = host.text();
     var position = host.cursor();
-    var start = forward ? position : Math.max(lineStart(text, position), position - count);
-    var end = forward ? Math.min(lineEnd(text, position), position + count) : position;
+    var start = forward
+        ? position
+        : Math.max(lineStart(text, position), stepBackward(text, position, count));
+    var end = forward
+        ? Math.min(lineEnd(text, position), stepForward(text, position, count))
+        : position;
     if (start === end)
         return;
     state.register = {text: text.slice(start, end), linewise: false};
@@ -1007,18 +1064,22 @@ function deleteCharacters(state, host, forward, count) {
 function replaceCharacters(state, host, character, count) {
     var text = host.text();
     var position = host.cursor();
-    var end = Math.min(lineEnd(text, position), position + count);
+    var end = Math.min(lineEnd(text, position), stepForward(text, position, count));
     if (end === position)
         return;
-    host.replace(position, end, repeatString(character, end - position));
-    host.setCursor(end - 1);
+    // One replacement character per character replaced, which is not the same
+    // as one per code unit once an astral character is in the run.
+    var replacement = repeatString(character, characterCount(text, position, end));
+    host.replace(position, end, replacement);
+    var updated = host.text();
+    host.setCursor(clampNormal(updated, stepBackward(updated, position + replacement.length, 1)));
     commitChange(state);
 }
 
 function toggleCase(state, host, count) {
     var text = host.text();
     var position = host.cursor();
-    var end = Math.min(lineEnd(text, position), position + count);
+    var end = Math.min(lineEnd(text, position), stepForward(text, position, count));
     if (end === position)
         return;
     var slice = text.slice(position, end).replace(/./g, function(character) {
@@ -1083,7 +1144,7 @@ function repeatChange(state, host) {
         }
         state.mode = "normal";
         state.insertSession = null;
-        host.setCursor(clampNormal(host.text(), host.cursor() - 1));
+        stepBackOntoLastCharacter(host);
     }
     state.replaying = false;
     resetPending(state);
@@ -1111,7 +1172,8 @@ function simpleCommand(state, host, key) {
     case "a":
         if (visual)
             return true;
-        enterInsert(state, host, Math.min(lineEnd(text, position), position + 1));
+        enterInsert(state, host,
+                    Math.min(lineEnd(text, position), stepForward(text, position, 1)));
         return true;
     case "A":
         if (visual)
@@ -1156,7 +1218,8 @@ function simpleCommand(state, host, key) {
         if (visual)
             return operator(state, host, "c");
         applyOperator(state, host, "c", position,
-                      Math.min(lineEnd(text, position), position + count), false);
+                      Math.min(lineEnd(text, position), stepForward(text, position, count)),
+                      false);
         return true;
     case "S":
         if (visual) {
