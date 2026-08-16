@@ -894,10 +894,20 @@ function applyMotion(state, host, motion) {
     if (state.operator !== "") {
         var from = host.cursor();
         var to = motion.position;
-        if (motion.inclusive && to >= from)
+        var linewise = !!motion.linewise;
+        if (motion.inclusive && to >= from) {
             to = Math.min(text.length, to + 1);
+        } else if (!linewise && to > from && to === lineStart(text, to)
+                   && to > lineEnd(text, from)) {
+            // An exclusive motion that lands in column one stops at the end
+            // of the line before it instead, and from at or before the first
+            // word it turns linewise (:h exclusive). Word motions are exempt:
+            // dw on the last word of a line reaches the line's end, no more.
+            to--;
+            linewise = !motion.word && from <= firstNonBlank(text, from);
+        }
         applyOperator(state, host, state.operator,
-                      Math.min(from, to), Math.max(from, to), !!motion.linewise);
+                      Math.min(from, to), Math.max(from, to), linewise);
         return true;
     }
 
@@ -935,9 +945,15 @@ function evaluateMotion(state, host, key, count) {
         // An operator over j or k takes whole lines, the way it does in vim,
         // where the display-line form is dgj. A bare j or k follows the
         // wrapped text instead, which is how a paragraph reads on screen.
-        if (state.operator !== "")
-            return {position: verticalMove(state, text, position, down ? count : -count),
-                    keepColumn: true, linewise: true};
+        if (state.operator !== "") {
+            var line = verticalMove(state, text, position, down ? count : -count);
+            // At the top or bottom of the document there is no line to reach,
+            // and a motion that cannot move fails its operator rather than
+            // taking the line the caret is already on.
+            if (lineStart(text, line) === lineStart(text, position))
+                return null;
+            return {position: line, keepColumn: true, linewise: true};
+        }
         var moved = host.displayLine(position, down ? 1 : -1, count, state.goalX);
         state.goalX = moved.goalX;
         return {position: moved.position, keepColumn: true};
@@ -957,7 +973,7 @@ function evaluateMotion(state, host, key, count) {
         }
         for (i = 0; i < count; i++)
             position = wordForward(text, position, key === "W");
-        return {position: position};
+        return {position: position, word: true};
     case "b":
     case "B":
         for (i = 0; i < count; i++)
@@ -1219,7 +1235,12 @@ function joinLines(state, host, count) {
         var next = end + 1;
         while (next < text.length && (text.charAt(next) === " " || text.charAt(next) === "\t"))
             next++;
-        var separator = end === lineStart(text, position) || next === lineEnd(text, next) ? "" : " ";
+        // A join adds the space between the two lines, unless one of them is
+        // empty or the first already ends in one.
+        var separator = end === lineStart(text, position)
+            || next === lineEnd(text, next)
+            || (end > 0 && isBlank(text.charAt(end - 1)))
+            ? "" : " ";
         host.replace(end, next, separator);
         host.setCursor(end);
         position = end;

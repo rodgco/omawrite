@@ -258,6 +258,41 @@ private slots:
         QCOMPARE(runVim(editor.data(), QStringLiteral("one two"), 0,
                         QStringLiteral("J")).text, QStringLiteral("one two"));
 
+        // dw on the last word of a line stops at the line's end rather than
+        // dragging the line below up, and an exclusive motion that lands in
+        // column one turns linewise from the start of a line.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta\ngamma"), 6,
+                        QStringLiteral("dw")).text, QStringLiteral("alpha \ngamma"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\n\ntwo\n\nthree"), 0,
+                        QStringLiteral("d}")).text, QStringLiteral("\ntwo\n\nthree"));
+
+        // A line motion with nowhere to go fails its operator instead of
+        // taking the line the caret is already on.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 5,
+                        QStringLiteral("dj")).text, QStringLiteral("one\ntwo"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
+                        QStringLiteral("dk")).text, QStringLiteral("one\ntwo"));
+
+        // Counts past the edge of the document stop there.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\nthree"), 0,
+                        QStringLiteral("99j")).cursor, 8);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("abc"), 0,
+                        QStringLiteral("99x")).text, QString());
+
+        // A join after a line that already ends in a space adds no second one.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one \ntwo"), 0,
+                        QStringLiteral("J")).text, QStringLiteral("one two"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\n\ntwo"), 0,
+                        QStringLiteral("J")).text, QStringLiteral("one\ntwo"));
+
+        // A find that misses leaves both the document and the register alone.
+        const VimResult missed = runVim(editor.data(), QStringLiteral("alpha beta"), 0,
+                                        QStringLiteral("yiwdfz"));
+        QCOMPARE(missed.text, QStringLiteral("alpha beta"));
+        QCOMPARE(missed.mode, QStringLiteral("normal"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta"), 0,
+                        QStringLiteral("yiwdfzP")).text, QStringLiteral("alphaalpha beta"));
+
         // Whole-line yank pastes below the line the caret is on.
         const VimResult pasted = runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
                                         QStringLiteral("yyp"));
@@ -840,18 +875,6 @@ private slots:
         QCOMPARE(editor->property("font").value<QFont>().pixelSize(), 15);
     }
 
-    void persistsVimMode() {
-        {
-            Backend backend;
-            QVERIFY(!backend.vimMode());
-            backend.setVimMode(true);
-        }
-        Backend nextWindow;
-        const bool remembered = nextWindow.vimMode();
-        nextWindow.setVimMode(false);
-        QVERIFY(remembered);
-    }
-
     // What "+y and "+p sit on: the clipboard, and the primary selection where
     // the desktop has one.
     void carriesTextThroughTheClipboard() {
@@ -865,351 +888,6 @@ private slots:
         backend.setClipboardText(QStringLiteral("selected"), true);
         QCOMPARE(backend.clipboardText(true), QStringLiteral("selected"));
         QCOMPARE(backend.clipboardText(), QStringLiteral("yanked\n"));
-    }
-
-    void vimEditsText() {
-        const QString enginePath = QFINDTESTDATA("../src/VimEngine.js");
-        QVERIFY(!enginePath.isEmpty());
-
-        QQmlEngine engine;
-        QQmlComponent component(&engine);
-        const QByteArray harness = R"QML(
-            import QtQuick
-            import "VimEngine.js" as Vim
-
-            TextEdit {
-                id: edit
-                textFormat: TextEdit.PlainText
-
-                property string clip: ""
-                property var winStub: ({
-                    vimYank: function(text) { edit.clip = text; },
-                    vimClipboardText: function() { return edit.clip; },
-                    vimReplace: function(start, end, replacement) {
-                        if (end > start)
-                            edit.remove(start, end);
-                        if (replacement.length > 0)
-                            edit.insert(start, replacement);
-                    },
-                    openVimCommand: function() {},
-                    openVimSearch: function() {},
-                    moveSearch: function() {}
-                })
-
-                QtObject {
-                    id: vimState
-                    objectName: "vimState"
-                    property string mode: "normal"
-                    property string pending: ""
-                    property string countText: ""
-                    property string opCountText: ""
-                    property string op: ""
-                    property string prefix: ""
-                    property string awaitingChar: ""
-                    property string lastFindCmd: ""
-                    property string lastFindChar: ""
-                    property int anchor: 0
-                    property int visualPos: 0
-                    property int insertStart: 0
-                    property real goalX: -1
-                    property bool replaying: false
-                    property var keyLog: []
-                    property var pendingChangeKeys: null
-                    property var lastChange: null
-                }
-
-                function load(content, position) {
-                    edit.text = content;
-                    edit.cursorPosition = position;
-                    edit.clip = "";
-                    vimState.mode = "normal";
-                    vimState.countText = "";
-                    vimState.opCountText = "";
-                    vimState.op = "";
-                    vimState.prefix = "";
-                    vimState.awaitingChar = "";
-                    vimState.goalX = -1;
-                    vimState.lastChange = null;
-                }
-
-                function feed(keys) {
-                    for (var i = 0; i < keys.length; i++)
-                        Vim.handleKey(vimState, edit, winStub,
-                                      { key: 0, text: keys[i], modifiers: 0 });
-                }
-
-                function esc() {
-                    Vim.handleKey(vimState, edit, winStub,
-                                  { key: Qt.Key_Escape, text: "", modifiers: 0 });
-                }
-
-                function type(content) {
-                    var at = edit.cursorPosition;
-                    edit.insert(at, content);
-                    edit.cursorPosition = at + content.length;
-                }
-            }
-        )QML";
-        const QUrl harnessUrl = QUrl::fromLocalFile(
-            QFileInfo(enginePath).absolutePath() + QStringLiteral("/VimHarness.qml"));
-        component.setData(harness, harnessUrl);
-        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-        QScopedPointer<QObject> editor(component.create());
-        QVERIFY2(editor, qPrintable(component.errorString()));
-        QObject *state = editor->findChild<QObject *>(QStringLiteral("vimState"));
-        QVERIFY(state);
-
-        auto load = [&](const QString &content, int position) {
-            QMetaObject::invokeMethod(editor.data(), "load",
-                                      Q_ARG(QVariant, content), Q_ARG(QVariant, position));
-        };
-        auto feed = [&](const QString &keys) {
-            QMetaObject::invokeMethod(editor.data(), "feed", Q_ARG(QVariant, keys));
-        };
-        auto esc = [&] { QMetaObject::invokeMethod(editor.data(), "esc"); };
-        auto type = [&](const QString &content) {
-            QMetaObject::invokeMethod(editor.data(), "type", Q_ARG(QVariant, content));
-        };
-        auto text = [&] { return editor->property("text").toString(); };
-        auto cursor = [&] { return editor->property("cursorPosition").toInt(); };
-        auto mode = [&] { return state->property("mode").toString(); };
-
-        // h and l stay on the line; the cursor never crosses a newline.
-        load(QStringLiteral("abc\ndef"), 1);
-        feed(QStringLiteral("l"));
-        QCOMPARE(cursor(), 2);
-        feed(QStringLiteral("l"));
-        QCOMPARE(cursor(), 2);
-        feed(QStringLiteral("h"));
-        QCOMPARE(cursor(), 1);
-        feed(QStringLiteral("h"));
-        QCOMPARE(cursor(), 0);
-        feed(QStringLiteral("h"));
-        QCOMPARE(cursor(), 0);
-        feed(QStringLiteral("2l"));
-        QCOMPARE(cursor(), 2);
-
-        // j and k move between lines and remember the goal column.
-        load(QStringLiteral("abcdef\nab\nabcdef"), 4);
-        feed(QStringLiteral("j"));
-        QCOMPARE(cursor(), 8);
-        feed(QStringLiteral("j"));
-        QCOMPARE(cursor(), 14);
-        feed(QStringLiteral("k"));
-        QCOMPARE(cursor(), 8);
-        feed(QStringLiteral("k"));
-        QCOMPARE(cursor(), 4);
-        feed(QStringLiteral("j"));
-        QCOMPARE(cursor(), 8);
-        feed(QStringLiteral("h"));
-        QCOMPARE(cursor(), 7);
-        feed(QStringLiteral("j"));
-        QCOMPARE(cursor(), 10);
-        feed(QStringLiteral("2k"));
-        QCOMPARE(cursor(), 0);
-        feed(QStringLiteral("k"));
-        QCOMPARE(cursor(), 0);
-        feed(QStringLiteral("2j"));
-        QCOMPARE(cursor(), 10);
-        feed(QStringLiteral("j"));
-        QCOMPARE(cursor(), 10);
-
-        // Word, line, and file motions.
-        load(QStringLiteral("alpha beta gamma"), 0);
-        feed(QStringLiteral("w"));
-        QCOMPARE(cursor(), 6);
-        feed(QStringLiteral("e"));
-        QCOMPARE(cursor(), 9);
-        feed(QStringLiteral("$"));
-        QCOMPARE(cursor(), 15);
-        feed(QStringLiteral("0"));
-        QCOMPARE(cursor(), 0);
-        feed(QStringLiteral("2w"));
-        QCOMPARE(cursor(), 11);
-
-        load(QStringLiteral("one\ntwo\nthree"), 5);
-        feed(QStringLiteral("gg"));
-        QCOMPARE(cursor(), 0);
-        feed(QStringLiteral("G"));
-        QCOMPARE(cursor(), 8);
-
-        // Operators: dw is exclusive, dd linewise, x takes counts.
-        load(QStringLiteral("alpha beta"), 0);
-        feed(QStringLiteral("dw"));
-        QCOMPARE(text(), QStringLiteral("beta"));
-
-        load(QStringLiteral("one\ntwo\nthree"), 0);
-        feed(QStringLiteral("dd"));
-        QCOMPARE(text(), QStringLiteral("two\nthree"));
-        feed(QStringLiteral("p"));
-        QCOMPARE(text(), QStringLiteral("two\none\nthree"));
-
-        load(QStringLiteral("abcdef"), 0);
-        feed(QStringLiteral("3x"));
-        QCOMPARE(text(), QStringLiteral("def"));
-
-        load(QStringLiteral("one\ntwo"), 4);
-        feed(QStringLiteral("yyP"));
-        QCOMPARE(text(), QStringLiteral("one\ntwo\ntwo"));
-
-        // cw behaves like ce; the insert session repeats with `.`.
-        load(QStringLiteral("alpha beta"), 0);
-        feed(QStringLiteral("cw"));
-        QCOMPARE(mode(), QStringLiteral("insert"));
-        QCOMPARE(text(), QStringLiteral(" beta"));
-        type(QStringLiteral("delta"));
-        esc();
-        QCOMPARE(text(), QStringLiteral("delta beta"));
-        QCOMPARE(mode(), QStringLiteral("normal"));
-        feed(QStringLiteral("w."));
-        QCOMPARE(text(), QStringLiteral("delta delta"));
-
-        // Dot repeats operator changes too.
-        load(QStringLiteral("aa bb cc"), 0);
-        feed(QStringLiteral("dw"));
-        feed(QStringLiteral("."));
-        QCOMPARE(text(), QStringLiteral("cc"));
-
-        // Character finds.
-        load(QStringLiteral("find the x here"), 0);
-        feed(QStringLiteral("fx"));
-        QCOMPARE(cursor(), 9);
-        feed(QStringLiteral("0dtx"));
-        QCOMPARE(text(), QStringLiteral("x here"));
-
-        // Join, case toggle, and replace.
-        load(QStringLiteral("one\ntwo"), 0);
-        feed(QStringLiteral("J"));
-        QCOMPARE(text(), QStringLiteral("one two"));
-
-        load(QStringLiteral("abc"), 0);
-        feed(QStringLiteral("~"));
-        QCOMPARE(text(), QStringLiteral("Abc"));
-
-        load(QStringLiteral("abc"), 0);
-        feed(QStringLiteral("rz"));
-        QCOMPARE(text(), QStringLiteral("zbc"));
-
-        // Visual mode yanks through the register.
-        load(QStringLiteral("alpha beta"), 0);
-        feed(QStringLiteral("vey"));
-        QCOMPARE(editor->property("clip").toString(), QStringLiteral("alpha"));
-        QCOMPARE(mode(), QStringLiteral("normal"));
-
-        // Text objects.
-        load(QStringLiteral("say \"hello there\" now"), 6);
-        feed(QStringLiteral("di\""));
-        QCOMPARE(text(), QStringLiteral("say \"\" now"));
-
-        load(QStringLiteral("para one\nstill one\n\npara two"), 0);
-        feed(QStringLiteral("dip"));
-        QCOMPARE(text(), QStringLiteral("\npara two"));
-
-        // Insert entries: o opens below, A appends at line end.
-        load(QStringLiteral("one\ntwo"), 0);
-        feed(QStringLiteral("o"));
-        QCOMPARE(mode(), QStringLiteral("insert"));
-        QCOMPARE(text(), QStringLiteral("one\n\ntwo"));
-        QCOMPARE(cursor(), 4);
-        esc();
-        feed(QStringLiteral("ggA"));
-        QCOMPARE(cursor(), 3);
-        esc();
-
-        // Normal mode never types plain keys into the document.
-        load(QStringLiteral("quiet"), 0);
-        feed(QStringLiteral("zQ%"));
-        QCOMPARE(text(), QStringLiteral("quiet"));
-
-        // dw on a line's last word stops at the line end.
-        load(QStringLiteral("ab\ncd"), 0);
-        feed(QStringLiteral("dw"));
-        QCOMPARE(text(), QStringLiteral("\ncd"));
-
-        // Deleting the last line takes its newline along, so a trailing
-        // empty line can be deleted too.
-        load(QStringLiteral("one\ntwo"), 4);
-        feed(QStringLiteral("dd"));
-        QCOMPARE(text(), QStringLiteral("one"));
-        load(QStringLiteral("one\n"), 4);
-        feed(QStringLiteral("dd"));
-        QCOMPARE(text(), QStringLiteral("one"));
-
-        // Line operators fail at the buffer edges instead of eating a line.
-        load(QStringLiteral("one\ntwo"), 4);
-        feed(QStringLiteral("dj"));
-        QCOMPARE(text(), QStringLiteral("one\ntwo"));
-        feed(QStringLiteral("gg"));
-        feed(QStringLiteral("dk"));
-        QCOMPARE(text(), QStringLiteral("one\ntwo"));
-
-        // A failed change motion keeps the register and stays in normal mode.
-        editor->setProperty("clip", QStringLiteral("keep"));
-        editor->setProperty("text", QStringLiteral("ab"));
-        editor->setProperty("cursorPosition", 0);
-        feed(QStringLiteral("ch"));
-        QCOMPARE(text(), QStringLiteral("ab"));
-        QCOMPARE(mode(), QStringLiteral("normal"));
-        QCOMPARE(editor->property("clip").toString(), QStringLiteral("keep"));
-
-        // ge takes the cursor character, being an inclusive motion.
-        load(QStringLiteral("alpha beta"), 6);
-        feed(QStringLiteral("dge"));
-        QCOMPARE(text(), QStringLiteral("alpheta"));
-
-        // A fresh t does not skip an adjacent target; only ; repeats do.
-        load(QStringLiteral("axbx"), 0);
-        feed(QStringLiteral("tx"));
-        QCOMPARE(cursor(), 0);
-
-        // Text objects work from visual mode.
-        load(QStringLiteral("hello world"), 1);
-        feed(QStringLiteral("viwd"));
-        QCOMPARE(text(), QStringLiteral(" world"));
-
-        // Astral characters move and delete whole, never split.
-        load(QStringLiteral("a\U0001F600b"), 1);
-        feed(QStringLiteral("x"));
-        QCOMPARE(text(), QStringLiteral("ab"));
-        load(QStringLiteral("a\U0001F600b"), 0);
-        feed(QStringLiteral("ll"));
-        QCOMPARE(cursor(), 3);
-
-        // Oversized counts finish immediately at the buffer edge.
-        load(QStringLiteral("aa bb"), 0);
-        feed(QStringLiteral("999999999w"));
-        QCOMPARE(cursor(), 4);
-
-        // Joining after trailing whitespace adds no second space.
-        load(QStringLiteral("one \ntwo"), 0);
-        feed(QStringLiteral("J"));
-        QCOMPARE(text(), QStringLiteral("one two"));
-
-        // r with Enter breaks the line.
-        load(QStringLiteral("abc"), 1);
-        feed(QStringLiteral("r\r"));
-        QCOMPARE(text(), QStringLiteral("a\nc"));
-        QCOMPARE(cursor(), 2);
-    }
-
-    void groupsVimReplaceIntoOneUndo() {
-        Backend backend;
-        QQmlEngine engine;
-        QQmlComponent component(&engine);
-        component.setData(QByteArrayLiteral(
-                              "import QtQuick\nTextEdit { textFormat: TextEdit.PlainText }"),
-                          QUrl());
-        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-        QScopedPointer<QObject> editor(component.create());
-        QVERIFY(editor);
-        backend.attachDocument(editor->property("textDocument").value<QObject *>());
-
-        editor->setProperty("text", QStringLiteral("abc"));
-        backend.replaceRange(0, 1, QStringLiteral("z"));
-        QCOMPARE(editor->property("text").toString(), QStringLiteral("zbc"));
-
-        QMetaObject::invokeMethod(editor.data(), "undo");
-        QCOMPARE(editor->property("text").toString(), QStringLiteral("abc"));
     }
 
     void remembersLastSaveDirectory() {

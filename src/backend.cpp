@@ -404,21 +404,6 @@ void Backend::setClipboardText(const QString &text, bool selection) const {
         clipboard->setText(text, clipboardMode(clipboard, selection));
 }
 
-// Replace a range as one edit block, so a single undo reverts the whole
-// change instead of leaving the removal behind.
-void Backend::replaceRange(int start, int end, const QString &replacement) {
-    if (!m_document)
-        return;
-
-    const int lastPosition = qMax(0, m_document->characterCount() - 1);
-    QTextCursor cursor(m_document);
-    cursor.beginEditBlock();
-    cursor.setPosition(qBound(0, start, lastPosition));
-    cursor.setPosition(qBound(0, end, lastPosition), QTextCursor::KeepAnchor);
-    cursor.insertText(replacement);
-    cursor.endEditBlock();
-}
-
 bool Backend::editorTextChanged() {
     if (m_loading || m_formattingTypography)
         return false;

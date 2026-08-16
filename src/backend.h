@@ -73,7 +73,6 @@ public:
     Q_INVOKABLE QString clipboardUrl() const;
     Q_INVOKABLE QString clipboardText(bool selection = false) const;
     Q_INVOKABLE void setClipboardText(const QString &text, bool selection = false) const;
-    Q_INVOKABLE void replaceRange(int start, int end, const QString &replacement);
     Q_INVOKABLE bool editorTextChanged();
     Q_INVOKABLE QVariantList hiddenRangesAt(int position) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
