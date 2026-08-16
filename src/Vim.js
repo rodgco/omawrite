@@ -191,6 +191,17 @@ function wordEnd(text, position, big) {
     return i;
 }
 
+function wordEndBackward(text, position, big) {
+    var i = position - 1;
+    var start = charClass(text.charAt(position), big);
+    if (start !== 0)
+        while (i >= 0 && charClass(text.charAt(i), big) === start)
+            i--;
+    while (i >= 0 && charClass(text.charAt(i), big) === 0)
+        i--;
+    return Math.max(0, i);
+}
+
 // Unlike e, cw on the last character of a word stops there instead of
 // running on to the end of the next one.
 function changeWordEnd(text, position, big) {
@@ -219,6 +230,43 @@ function paragraphBackward(text, position) {
             return i;
     }
     return 0;
+}
+
+// A sentence ends at . ! or ?, past any closing quote or bracket, followed by
+// whitespace. Close enough to vim's definition for prose, and it never runs
+// past the end of the paragraph.
+var SENTENCE_END = /[.!?][)\]"'’]*(?=\s|$)/g;
+
+function sentenceForward(text, position) {
+    var paragraph = paragraphForward(text, position);
+    SENTENCE_END.lastIndex = position;
+    var match = SENTENCE_END.exec(text);
+    if (!match || match.index >= paragraph)
+        return paragraph;
+    var i = match.index + match[0].length;
+    while (i < text.length && /\s/.test(text.charAt(i)))
+        i++;
+    return Math.min(i, paragraph);
+}
+
+function sentenceBackward(text, position) {
+    var from = paragraphBackward(text, position);
+    var starts = [firstNonBlank(text, from === 0 ? 0 : from + 1)];
+    SENTENCE_END.lastIndex = from;
+    var match;
+    while ((match = SENTENCE_END.exec(text)) !== null) {
+        var i = match.index + match[0].length;
+        while (i < text.length && /\s/.test(text.charAt(i)))
+            i++;
+        if (i >= position)
+            break;
+        starts.push(i);
+    }
+    for (var s = starts.length - 1; s >= 0; s--) {
+        if (starts[s] < position)
+            return starts[s];
+    }
+    return Math.max(0, from);
 }
 
 function findInLine(text, position, command, character, count) {
@@ -607,6 +655,20 @@ function argument(state, host, key) {
             var delta = key === "j" ? effectiveCount(state) : -effectiveCount(state);
             return applyMotion(state, host, {position: host.displayLine(caret(state, host), delta)});
         }
+        if (key === "e" || key === "E") {
+            var text = host.text();
+            var back = caret(state, host);
+            for (var n = 0; n < effectiveCount(state); n++)
+                back = wordEndBackward(text, back, key === "E");
+            if (state.operator !== "") {
+                // ge is inclusive, and it runs backwards, so the operator
+                // takes the caret's own character along with the span.
+                applyOperator(state, host, state.operator, back,
+                              Math.min(text.length, host.cursor() + 1), false);
+                return true;
+            }
+            return applyMotion(state, host, {position: back});
+        }
         resetPending(state);
         return true;
     }
@@ -799,6 +861,14 @@ function evaluateMotion(state, host, key, count) {
     case "}":
         for (i = 0; i < count; i++)
             position = paragraphForward(text, position);
+        return {position: position};
+    case ")":
+        for (i = 0; i < count; i++)
+            position = sentenceForward(text, position);
+        return {position: position};
+    case "(":
+        for (i = 0; i < count; i++)
+            position = sentenceBackward(text, position);
         return {position: position};
     case ";":
     case ",":

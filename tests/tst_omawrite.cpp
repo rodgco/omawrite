@@ -195,6 +195,27 @@ private slots:
         QCOMPARE(runVim(editor.data(), QStringLiteral("abcdef\nx\nabcdef"), 4,
                         QStringLiteral("jj")).cursor, 13);
 
+        // Sentences run to the first word after the punctuation, and stop at
+        // the end of the paragraph rather than running into the next one.
+        const QString prose = QStringLiteral("One thing. Two things! Three?\n\nNext para.");
+        QCOMPARE(runVim(editor.data(), prose, 0, QStringLiteral(")")).cursor, 11);
+        QCOMPARE(runVim(editor.data(), prose, 0, QStringLiteral("2)")).cursor, 23);
+        QCOMPARE(runVim(editor.data(), prose, 23, QStringLiteral("(")).cursor, 11);
+        QCOMPARE(runVim(editor.data(), prose, 0, QStringLiteral("3)")).cursor, 30);
+        QCOMPARE(runVim(editor.data(), prose, 0, QStringLiteral("d)")).text,
+                 QStringLiteral("Two things! Three?\n\nNext para."));
+
+        // ge walks back to the end of the previous word, and takes the
+        // caret's own character when an operator is waiting.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta gamma"), 11,
+                        QStringLiteral("ge")).cursor, 9);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta gamma"), 11,
+                        QStringLiteral("2ge")).cursor, 4);
+        // From the t of "beta" back through the a of "alpha", both ends
+        // taken, which leaves the trailing a of "beta" behind.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta"), 8,
+                        QStringLiteral("dge")).text, QStringLiteral("alpha"));
+
         const VimResult deleted = runVim(editor.data(), QStringLiteral("alpha beta gamma"), 0,
                                          QStringLiteral("dw"));
         QCOMPARE(deleted.text, QStringLiteral("beta gamma"));
