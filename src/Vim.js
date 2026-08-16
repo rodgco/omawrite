@@ -58,6 +58,10 @@ function createHost(editor, hooks) {
             editor.moveCursorSelection(clamp(editor.text, to));
         },
         deselect: function() { editor.deselect(); },
+        selection: function() {
+            return {start: Math.min(editor.selectionStart, editor.selectionEnd),
+                    end: Math.max(editor.selectionStart, editor.selectionEnd)};
+        },
         replace: function(start, end, replacement) {
             EditorMutations.replaceRange(editor, start, end, replacement);
         },
@@ -868,6 +872,15 @@ function operator(state, host, key) {
 
     if (state.operator !== "") {
         resetPending(state);
+        return true;
+    }
+
+    // A selection dragged out with the mouse stands in for a visual range, so
+    // d or y after one does what it looks like it should.
+    var selection = host.selection();
+    if (selection.end > selection.start) {
+        host.deselect();
+        applyOperator(state, host, key, selection.start, selection.end, false);
         return true;
     }
 

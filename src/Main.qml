@@ -898,7 +898,9 @@ ApplicationWindow {
 
                 Keys.priority: Keys.BeforeItem
                 Keys.onPressed: function(event) {
-                    if (win.vimMode) {
+                    // Mid-composition the keys belong to the input method, not
+                    // to vim, or a dead key would run a command.
+                    if (win.vimMode && !editor.inputMethodComposing) {
                         win.vimMessage = "";
                         var consumed = Vim.handleKey(vimState, vimHost, vimKeyName(event));
                         publishVimStatus();

@@ -340,6 +340,15 @@ private slots:
         QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta gamma"), 7,
                         QStringLiteral("viwd")).text, QStringLiteral("alpha  gamma"));
 
+        // A selection dragged out with the mouse stands in for a visual range.
+        QMetaObject::invokeMethod(editor.data(), "reset",
+                                  Q_ARG(QVariant, QStringLiteral("alpha beta")),
+                                  Q_ARG(QVariant, 0));
+        QMetaObject::invokeMethod(editor.data(), "selectRange",
+                                  Q_ARG(QVariant, 0), Q_ARG(QVariant, 6));
+        QMetaObject::invokeMethod(editor.data(), "feed", Q_ARG(QVariant, QStringLiteral("d")));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("beta"));
+
         // An object that does not resolve leaves the document alone.
         QCOMPARE(runVim(editor.data(), QStringLiteral("no quotes here"), 3,
                         QStringLiteral("di\"")).text, QStringLiteral("no quotes here"));
@@ -1313,6 +1322,8 @@ private:
                             insert(cursorPosition, keys[i]);
                     }
                 }
+
+                function selectRange(from, to) { select(from, to); }
 
                 function mode() { return state.mode; }
 
