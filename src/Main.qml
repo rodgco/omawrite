@@ -764,10 +764,13 @@ ApplicationWindow {
                     }
 
                     if (event.modifiers & (Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier)) {
-                        if ((event.modifiers & Qt.ControlModifier)
-                                && !(event.modifiers & (Qt.MetaModifier | Qt.AltModifier))
-                                && event.key >= Qt.Key_A && event.key <= Qt.Key_Z)
+                        var controlOnly = (event.modifiers & Qt.ControlModifier)
+                            && !(event.modifiers & (Qt.MetaModifier | Qt.AltModifier));
+                        if (controlOnly && event.key >= Qt.Key_A && event.key <= Qt.Key_Z)
                             return "C-" + String.fromCharCode(event.key).toLowerCase();
+                        // Ctrl+[ is the other Escape, and it is not a letter.
+                        if (controlOnly && event.key === Qt.Key_BracketLeft)
+                            return "C-[";
                         return "";
                     }
 

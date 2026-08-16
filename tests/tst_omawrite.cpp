@@ -687,6 +687,14 @@ private slots:
         QTest::keyClick(window, Qt::Key_Escape);
         QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
 
+        // Ctrl+[ is vim's other Escape, and it is not a letter, so it needs
+        // naming separately from the C-<letter> chords.
+        QTest::keyClick(window, Qt::Key_I);
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("INSERT"));
+        QTest::keyClick(window, Qt::Key_BracketLeft, Qt::ControlModifier);
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("xbeta"));
+
         backend.setVimMode(false);
         QCOMPARE(window->property("vimStatus").toString(), QString());
         // Escape stepped the caret back onto the x, so plain typing lands there.
