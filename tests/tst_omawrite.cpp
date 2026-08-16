@@ -544,6 +544,15 @@ private slots:
         QCOMPARE(runEx(editor.data(), QStringLiteral("a/b"), 0,
                        QStringLiteral(":s#/#-#")).text, QStringLiteral("a-b"));
 
+        // The caret lands on the last line substituted, not the first. The
+        // loop runs bottom up so that replacing a line cannot shift the ones
+        // still to come, which is the opposite order to where it should stop.
+        const VimResult swept = runEx(editor.data(),
+                                      QStringLiteral("a\nb\na\nb\na"), 0,
+                                      QStringLiteral(":%s/a/z/"));
+        QCOMPARE(swept.text, QStringLiteral("z\nb\nz\nb\nz"));
+        QCOMPARE(swept.cursor, 8);
+
         // Reported outcomes, including the ones that change nothing.
         QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":%s/fish/cat/")).message,
                  QStringLiteral("4 substitutions on 4 lines"));

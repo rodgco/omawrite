@@ -1769,7 +1769,7 @@ function substitute(state, host, range, separator, body) {
     var everyMatch = flags.indexOf("g") >= 0;
     var replaced = 0;
     var changedLines = 0;
-    var lastChanged = -1;
+    var landing = -1;
 
     host.beginChange();
     // Bottom up, so replacing a line cannot shift the lines still to come.
@@ -1790,14 +1790,17 @@ function substitute(state, host, range, separator, body) {
         host.replace(start, end, updated);
         replaced += here;
         changedLines++;
-        lastChanged = line;
+        // Running bottom up, the first line reached with a match is the last
+        // one in the file, which is where vim leaves the caret.
+        if (landing < 0)
+            landing = line;
     }
     host.endChange();
 
     if (replaced === 0)
         return {ok: false, message: "Pattern not found: " + pattern};
 
-    gotoLine(host, lastChanged);
+    gotoLine(host, landing);
     return {ok: true,
             message: replaced > 1
                 ? replaced + " substitutions on " + changedLines
