@@ -127,9 +127,9 @@ function createHost(editor, hooks) {
         openLine: function(below) {
             return hooks.openLine ? hooks.openLine(below) : -1;
         },
-        linkPaste: function(start, end, payload, fromClipboard) {
+        linkPaste: function(start, end, payload, register) {
             return hooks.linkPaste
-                ? hooks.linkPaste(start, end, payload, fromClipboard)
+                ? hooks.linkPaste(start, end, payload, register)
                 : false;
         },
         // "+ and "* reach outside the application, so they are the one pair
@@ -643,6 +643,19 @@ function visualLines(state, host) {
     var text = host.text();
     return {start: lineNumberAt(text, Math.min(state.anchor, state.head)),
             end: lineNumberAt(text, Math.max(state.anchor, state.head))};
+}
+
+// Coming back from the search bar or the : line, where the keys belonged to
+// something else for a while. The mode and any half-typed command are stale;
+// the registers, the last change and the last search are not, and a writer
+// who yanked a paragraph before going looking for where it belongs would not
+// thank us for emptying them.
+function returnToNormal(state) {
+    state.mode = "normal";
+    state.insertSession = null;
+    state.anchor = -1;
+    state.head = -1;
+    resetPending(state);
 }
 
 // An edit from outside the engine leaves the visual anchors pointing at text
@@ -1445,7 +1458,7 @@ function simpleCommand(state, host, key) {
             // Read before the delete, which writes the replaced text to the
             // unnamed register the way vim does.
             var incoming = readRegister(state, host, state.pendingRegister);
-            var fromClipboard = isClipboardRegister(state.pendingRegister);
+            var register = state.pendingRegister;
             state.mode = "normal";
             state.anchor = -1;
             state.head = -1;
@@ -1455,8 +1468,11 @@ function simpleCommand(state, host, key) {
             // A URL pasted over a selection is a Markdown link, which is what
             // Ctrl+V does here too. p defers to the editor for that; P stays
             // the literal paste, and a count means the run was meant as text.
-            if (key === "p" && count === 1 && !incoming.linewise
-                    && host.linkPaste(range.start, range.end, incoming.text, fromClipboard)) {
+            // Both ends have to be charwise: a V-LINE range carries the raw
+            // anchors rather than whole lines, and wrapping those would take
+            // half the selection.
+            if (key === "p" && count === 1 && !incoming.linewise && !range.linewise
+                    && host.linkPaste(range.start, range.end, incoming.text, register)) {
                 resetPending(state);
                 return true;
             }

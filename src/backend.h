@@ -70,7 +70,7 @@ public:
     Q_INVOKABLE void keepExternalVersion();
     Q_INVOKABLE void printDocument();
     Q_INVOKABLE void newWindow();
-    Q_INVOKABLE QString clipboardUrl() const;
+    Q_INVOKABLE QString clipboardUrl(bool selection = false) const;
     Q_INVOKABLE QString clipboardText(bool selection = false) const;
     Q_INVOKABLE void setClipboardText(const QString &text, bool selection = false) const;
     Q_INVOKABLE bool editorTextChanged();

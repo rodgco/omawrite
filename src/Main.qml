@@ -140,7 +140,7 @@ ApplicationWindow {
         searchUpdating = false;
         replaceOpen = false;
         editor.forceActiveFocus();
-        editor.resetVim();
+        editor.leaveDetour();
     }
 
     function openCommandLine(prefill) {
@@ -155,6 +155,7 @@ ApplicationWindow {
         commandOpen = false;
         commandField.text = "";
         editor.forceActiveFocus();
+        editor.leaveDetour();
     }
 
     function runCommandLine() {
@@ -615,8 +616,13 @@ ApplicationWindow {
 
                 property var vimState: Vim.createState()
                 // How many of the engine's edit blocks are open. While any is,
-                // the editor's own text property lags the document.
+                // the editor's own text property lags the document, so both
+                // the engine and EditorMutations have to ask the document.
                 property int vimEditDepth: 0
+
+                function liveLength() {
+                    return vimEditDepth > 0 ? backend.documentText().length : text.length;
+                }
 
                 property var vimHost: Vim.createHost(editor, {
                     text: function() {
@@ -638,10 +644,14 @@ ApplicationWindow {
                     openLine: function(below) {
                         return editor.openLineForVim(below);
                     },
-                    linkPaste: function(start, end, payload, fromClipboard) {
+                    linkPaste: function(start, end, payload, register) {
                         editor.select(start, end);
+                        // "+ and "* ask the clipboard they name, which carries
+                        // a uri-list its plain text does not. Every other
+                        // register hands its own contents over.
+                        var systemRegister = register === "+" || register === "*";
                         var wrapped = editor.pasteUrlAsMarkdownLink(
-                            fromClipboard ? undefined : payload);
+                            systemRegister ? undefined : payload, register === "*");
                         if (!wrapped) {
                             editor.deselect();
                             return false;
@@ -708,6 +718,18 @@ ApplicationWindow {
                     win.vimMessage = "";
                     if (win.commandOpen)
                         win.closeCommandLine();
+                    deselect();
+                    if (win.vimMode)
+                        cursorPosition = Vim.clampNormal(text, cursorPosition);
+                    publishVimStatus();
+                }
+
+                // Back from the search bar or the command line. Unlike
+                // resetVim this keeps the registers, the last change and the
+                // last search, none of which the detour invalidated.
+                function leaveDetour() {
+                    Vim.returnToNormal(vimState);
+                    win.vimMessage = "";
                     deselect();
                     if (win.vimMode)
                         cursorPosition = Vim.clampNormal(text, cursorPosition);
@@ -872,14 +894,14 @@ ApplicationWindow {
                 // Wrap the selection as a Markdown link. With no payload the
                 // URL comes from the clipboard, which carries a uri-list its
                 // plain text does not; vim's registers hand theirs over.
-                function pasteUrlAsMarkdownLink(payload) {
+                function pasteUrlAsMarkdownLink(payload, fromSelection) {
                     var start = Math.min(selectionStart, selectionEnd);
                     var end = Math.max(selectionStart, selectionEnd);
                     if (start === end)
                         return false;
 
                     var url = payload === undefined
-                        ? backend.clipboardUrl()
+                        ? backend.clipboardUrl(fromSelection === true)
                         : backend.normalizedLinkUrl(payload);
                     if (url === "")
                         return false;

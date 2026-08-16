@@ -399,6 +399,27 @@ private slots:
         QCOMPARE(editor->property("unhandled").toStringList(), QStringList{QStringLiteral("a")});
     }
 
+    // The engine runs its edits inside one of the document's edit blocks,
+    // where the editor's text property stops moving until the block closes.
+    // Everything it does has to survive that; the harness freezes its text
+    // the same way so these run without a window.
+    void editsThroughAnOpenEditBlock() {
+        QScopedPointer<QObject> editor(createVimHarness());
+        QVERIFY(!editor.isNull());
+
+        // The second edit of a repeat lands past where the document ended
+        // when the block opened. Clamping it to the stale length would drop
+        // it back inside the old text and mangle both.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("ab"), 0,
+                        QStringLiteral("oX<Esc>.")).text, QStringLiteral("ab\nX\nX"));
+
+        // Commands that edit repeatedly read the document as they go.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\nthree"), 0,
+                        QStringLiteral("3J")).text, QStringLiteral("one two three"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
+                        QStringLiteral("yyp")).text, QStringLiteral("one\none\ntwo"));
+    }
+
     void yanksAndPastesThroughNamedRegisters() {
         QScopedPointer<QObject> editor(createVimHarness());
         QVERIFY(!editor.isNull());
@@ -445,6 +466,24 @@ private slots:
         QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta"), 0,
                         QStringLiteral("\"bdw\"bP")).text, QStringLiteral("alpha beta"));
         QCOMPARE(clipboard(), QStringLiteral("untouched"));
+
+        // The link shortcut is offered charwise ranges only, and it tells the
+        // editor which register asked, so "+ and "* reach the clipboard each
+        // of them names rather than whichever one is nearer.
+        editor->setProperty("clipboardText", QStringLiteral("https://example.com"));
+        runVim(editor.data(), QStringLiteral("alpha beta"), 0, QStringLiteral("ve\"+p"));
+        QCOMPARE(editor->property("linkPasteCalls").toStringList(),
+                 QStringList{QStringLiteral("0:5:https://example.com:+")});
+
+        editor->setProperty("selectionText", QStringLiteral("https://example.org"));
+        runVim(editor.data(), QStringLiteral("alpha beta"), 0, QStringLiteral("ve\"*p"));
+        QCOMPARE(editor->property("linkPasteCalls").toStringList(),
+                 QStringList{QStringLiteral("0:5:https://example.org:*")});
+
+        // A V-LINE range carries the raw anchors rather than whole lines, so
+        // wrapping it would take part of the selection.
+        runVim(editor.data(), QStringLiteral("alpha\nbeta"), 0, QStringLiteral("V\"+p"));
+        QCOMPARE(editor->property("linkPasteCalls").toStringList(), QStringList());
 
         // The pending register shows in the footer while it waits.
         QMetaObject::invokeMethod(editor.data(), "reset",
@@ -680,6 +719,15 @@ private slots:
         QCOMPARE(text(), QStringLiteral("one\none\ntwo"));
         QCOMPARE(editor->property("cursorPosition").toInt(), 4);
 
+        // An edit that runs past where the document ended before the command
+        // started must not be clamped to the editor's stale copy of it.
+        load(QStringLiteral("one\n\ntwo"), 0);
+        typeInto(window, QStringLiteral("otwo"));
+        esc();
+        editor->setProperty("cursorPosition", 12);
+        typeInto(window, QStringLiteral("."));
+        QCOMPARE(text(), QStringLiteral("one\n\ntwo\n\ntwo\n\ntwo"));
+
         // o carries a bullet down the way Return does in insert mode.
         load(QStringLiteral("- item"), 3);
         typeInto(window, QStringLiteral("o"));
@@ -731,6 +779,17 @@ private slots:
         load(QStringLiteral("read the docs here"), 9);
         typeInto(window, QStringLiteral("ve\"+p"));
         QCOMPARE(text(), QStringLiteral("read the manual here"));
+
+        // Going to the search bar and back leaves normal mode, but not the
+        // registers: yanking something and then looking for where it belongs
+        // is the whole point of having gone.
+        load(QStringLiteral("one\ntwo"), 0);
+        typeInto(window, QStringLiteral("yy"));
+        window->setProperty("searchOpen", true);
+        QMetaObject::invokeMethod(window, "closeSearch");
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
+        typeInto(window, QStringLiteral("p"));
+        QCOMPARE(text(), QStringLiteral("one\none\ntwo"));
 
         // A URL yanked into a register links the same as a copied one, with
         // the clipboard empty to prove the register is what is being read.
@@ -1064,7 +1123,54 @@ private:
                 property string clipboardText: ""
                 property string selectionText: ""
 
-                Component.onCompleted: host = Vim.createHost(this, {
+                // A stand-in for a QTextDocument edit block. While one is open
+                // the real editor's text property stops moving, because the
+                // document holds its change signals back until the block
+                // closes; everything else stays live. The engine has to work
+                // through that, so the harness reproduces it rather than
+                // handing the engine a document that is always up to date.
+                property var linkPasteCalls: []
+                property int blockDepth: 0
+                property string frozenText: ""
+
+                property var blockedEditor: ({
+                    get text() {
+                        return harness.blockDepth > 0 ? harness.frozenText : harness.text;
+                    },
+                    get cursorPosition() { return harness.cursorPosition; },
+                    set cursorPosition(value) { harness.cursorPosition = value; },
+                    get selectionStart() { return harness.selectionStart; },
+                    get selectionEnd() { return harness.selectionEnd; },
+                    liveLength: function() { return harness.text.length; },
+                    deselect: function() { harness.deselect(); },
+                    select: function(from, to) { harness.select(from, to); },
+                    moveCursorSelection: function(to) { harness.moveCursorSelection(to); },
+                    remove: function(from, to) { harness.remove(from, to); },
+                    insert: function(at, what) { harness.insert(at, what); },
+                    undo: function() { harness.undo(); },
+                    redo: function() { harness.redo(); },
+                    positionAt: function(x, y) { return harness.positionAt(x, y); },
+                    positionToRectangle: function(at) {
+                        return harness.positionToRectangle(at);
+                    }
+                })
+
+                Component.onCompleted: host = Vim.createHost(blockedEditor, {
+                    text: function() { return harness.text; },
+                    beginChange: function() {
+                        if (harness.blockDepth++ === 0)
+                            harness.frozenText = harness.text;
+                    },
+                    endChange: function() {
+                        harness.blockDepth = Math.max(0, harness.blockDepth - 1);
+                    },
+                    // Records what the engine asked for and declines, so the
+                    // plain paste still runs and the arguments can be checked.
+                    linkPaste: function(start, end, payload, register) {
+                        harness.linkPasteCalls = harness.linkPasteCalls.concat(
+                            [start + ":" + end + ":" + payload + ":" + register]);
+                        return false;
+                    },
                     clipboard: function(fromSelection) {
                         return fromSelection ? harness.selectionText : harness.clipboardText;
                     },
@@ -1089,6 +1195,7 @@ private:
                     state = Vim.createState();
                     unhandled = [];
                     calls = [];
+                    linkPasteCalls = [];
                     message = "";
                     ok = true;
                     text = startText;

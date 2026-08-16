@@ -358,12 +358,20 @@ void Backend::newWindow() {
         setStatus(QStringLiteral("Could not open a new window."));
 }
 
-QString Backend::clipboardUrl() const {
+// The "* register is the primary selection, where a middle click pastes from.
+// Desktops without one fall back to the clipboard, so "* still does something
+// rather than nothing.
+static QClipboard::Mode clipboardMode(const QClipboard *clipboard, bool selection) {
+    return selection && clipboard->supportsSelection() ? QClipboard::Selection
+                                                       : QClipboard::Clipboard;
+}
+
+QString Backend::clipboardUrl(bool selection) const {
     const QClipboard *clipboard = QGuiApplication::clipboard();
     if (!clipboard)
         return {};
 
-    const QMimeData *mimeData = clipboard->mimeData();
+    const QMimeData *mimeData = clipboard->mimeData(clipboardMode(clipboard, selection));
     if (!mimeData)
         return {};
 
@@ -380,14 +388,6 @@ QString Backend::clipboardUrl() const {
         return {};
 
     return normalizedLinkUrl(mimeData->text());
-}
-
-// The "* register is the primary selection, where a middle click pastes from.
-// Desktops without one fall back to the clipboard, so "* still does something
-// rather than nothing.
-static QClipboard::Mode clipboardMode(const QClipboard *clipboard, bool selection) {
-    return selection && clipboard->supportsSelection() ? QClipboard::Selection
-                                                       : QClipboard::Clipboard;
 }
 
 QString Backend::clipboardText(bool selection) const {
