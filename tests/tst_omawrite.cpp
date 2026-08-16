@@ -267,6 +267,39 @@ private slots:
         QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
                         QStringLiteral("ddu")).text, QStringLiteral("one\ntwo"));
 
+        // Text objects take a span without a motion. iw stops at the word,
+        // aw takes the space after it, and both work under any operator.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta gamma"), 7,
+                        QStringLiteral("diw")).text, QStringLiteral("alpha  gamma"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta gamma"), 7,
+                        QStringLiteral("daw")).text, QStringLiteral("alpha gamma"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta"), 8,
+                        QStringLiteral("ciwomega<Esc>")).text, QStringLiteral("alpha omega"));
+
+        // The quote and bracket pairs, from anywhere inside them.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("say \"hello there\" now"), 9,
+                        QStringLiteral("di\"")).text, QStringLiteral("say \"\" now"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("say \"hello\" now"), 6,
+                        QStringLiteral("da\"")).text, QStringLiteral("say  now"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("f(a, g(b), c)"), 4,
+                        QStringLiteral("di(")).text, QStringLiteral("f()"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("f(a, g(b), c)"), 7,
+                        QStringLiteral("di(")).text, QStringLiteral("f(a, g(), c)"));
+
+        // ip is linewise and stops at the blank line; ap takes the gap too.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\n\nthree"), 4,
+                        QStringLiteral("dip")).text, QStringLiteral("\nthree"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo\n\nthree"), 4,
+                        QStringLiteral("dap")).text, QStringLiteral("three"));
+
+        // From visual mode the object becomes the selection.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta gamma"), 7,
+                        QStringLiteral("viwd")).text, QStringLiteral("alpha  gamma"));
+
+        // An object that does not resolve leaves the document alone.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("no quotes here"), 3,
+                        QStringLiteral("di\"")).text, QStringLiteral("no quotes here"));
+
         // Normal mode never lets a plain letter reach the document.
         const VimResult swallowed = runVim(editor.data(), QStringLiteral("text"), 0,
                                            QStringLiteral("zq"));

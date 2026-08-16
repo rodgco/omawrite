@@ -106,13 +106,22 @@ function lineEnd(text, position) {
     return index < 0 ? text.length : index;
 }
 
+function isBlank(character) {
+    return character === " " || character === "\t";
+}
+
 function firstNonBlank(text, position) {
     var start = lineStart(text, position);
     var end = lineEnd(text, position);
     var i = start;
-    while (i < end && (text.charAt(i) === " " || text.charAt(i) === "\t"))
+    while (i < end && isBlank(text.charAt(i)))
         i++;
     return i < end ? i : start;
+}
+
+function lineIsEmpty(text, position) {
+    var start = lineStart(text, position);
+    return lineEnd(text, start) === start;
 }
 
 function indentOf(text, position) {
@@ -240,6 +249,135 @@ function repeatString(value, count) {
     for (var i = 0; i < count; i++)
         result += value;
     return result;
+}
+
+// ---------------------------------------------------------------- objects
+
+// The spans an operator can take without a motion: iw / aw, ip / ap, the
+// quotes and the bracket pairs. The a-form swallows the separator too —
+// trailing whitespace for a word, the blank lines under a paragraph, the
+// quotes or brackets themselves.
+function textObject(text, position, around, kind) {
+    if (kind === "w" || kind === "W")
+        return wordObject(text, position, around, kind === "W");
+    if (kind === "p")
+        return paragraphObject(text, position, around);
+    if (kind === "\"" || kind === "'" || kind === "`")
+        return quoteObject(text, position, around, kind);
+    return pairObject(text, position, around, kind);
+}
+
+// A run of one character class, which is why iw on a space takes the run of
+// spaces. Words never cross a line break.
+function wordObject(text, position, around, big) {
+    var cls = charClass(text.charAt(position), big);
+    var start = position;
+    var end = position;
+    while (start > 0 && text.charAt(start - 1) !== "\n"
+           && charClass(text.charAt(start - 1), big) === cls)
+        start--;
+    while (end < text.length && text.charAt(end) !== "\n"
+           && charClass(text.charAt(end), big) === cls)
+        end++;
+    if (around) {
+        var trailing = end;
+        while (trailing < text.length && isBlank(text.charAt(trailing)))
+            trailing++;
+        // aw takes the space after the word, or the space before it when the
+        // word ends the line and there is none after.
+        if (trailing > end) {
+            end = trailing;
+        } else {
+            while (start > 0 && isBlank(text.charAt(start - 1)))
+                start--;
+        }
+    }
+    return {start: start, end: end, linewise: false};
+}
+
+// A run of lines that are all blank or all not, so ip inside a paragraph
+// takes the paragraph and ip on the gap between two takes the gap.
+function paragraphObject(text, position, around) {
+    var first = lineStart(text, position);
+    var blank = lineIsEmpty(text, first);
+    var last = first;
+    while (first > 0 && lineIsEmpty(text, lineStart(text, first - 1)) === blank)
+        first = lineStart(text, first - 1);
+    while (lineEnd(text, last) < text.length
+           && lineIsEmpty(text, lineEnd(text, last) + 1) === blank)
+        last = lineEnd(text, last) + 1;
+
+    var end = Math.min(text.length, lineEnd(text, last) + 1);
+    if (around) {
+        var grown = end;
+        while (grown < text.length && lineIsEmpty(text, grown))
+            grown = lineEnd(text, grown) + 1;
+        if (grown > end)
+            end = Math.min(text.length, grown);
+        else
+            while (first > 0 && lineIsEmpty(text, lineStart(text, first - 1)))
+                first = lineStart(text, first - 1);
+    }
+    return {start: first, end: end, linewise: true};
+}
+
+// Quotes pair off from the start of the line, so the caret between the second
+// and third quote on a line is outside the first pair, not inside it.
+function quoteObject(text, position, around, quote) {
+    var open = -1;
+    var end = lineEnd(text, position);
+    for (var i = lineStart(text, position); i < end; i++) {
+        if (text.charAt(i) !== quote)
+            continue;
+        if (open < 0)
+            open = i;
+        else if (i >= position)
+            return around ? {start: open, end: i + 1, linewise: false}
+                          : {start: open + 1, end: i, linewise: false};
+        else
+            open = -1;
+    }
+    return null;
+}
+
+var OBJECT_PAIRS = {"(": "()", ")": "()", b: "()",
+                    "[": "[]", "]": "[]",
+                    "{": "{}", "}": "{}", B: "{}",
+                    "<": "<>", ">": "<>"};
+
+function pairObject(text, position, around, kind) {
+    var pair = OBJECT_PAIRS[kind];
+    if (!pair)
+        return null;
+
+    var depth = 0;
+    var open = -1;
+    for (var back = position; back >= 0; back--) {
+        if (text.charAt(back) === pair.charAt(1) && back !== position) {
+            depth++;
+        } else if (text.charAt(back) === pair.charAt(0)) {
+            if (depth === 0) {
+                open = back;
+                break;
+            }
+            depth--;
+        }
+    }
+    if (open < 0)
+        return null;
+
+    depth = 0;
+    for (var forward = open + 1; forward < text.length; forward++) {
+        if (text.charAt(forward) === pair.charAt(0)) {
+            depth++;
+        } else if (text.charAt(forward) === pair.charAt(1)) {
+            if (depth === 0)
+                return around ? {start: open, end: forward + 1, linewise: false}
+                              : {start: open + 1, end: forward, linewise: false};
+            depth--;
+        }
+    }
+    return null;
 }
 
 // ---------------------------------------------------------------- caret
@@ -431,6 +569,14 @@ function dispatch(state, host, key) {
         return true;
     }
 
+    // i and a name a text object while an operator waits or a visual
+    // selection is open. Everywhere else they are the insert commands.
+    if ((key === "i" || key === "a")
+            && (state.operator !== "" || state.mode === "visual" || state.mode === "vline")) {
+        state.pending = key;
+        return true;
+    }
+
     if (key === "d" || key === "c" || key === "y")
         return operator(state, host, key);
 
@@ -465,6 +611,9 @@ function argument(state, host, key) {
         return true;
     }
 
+    if (pending === "i" || pending === "a")
+        return applyObject(state, host, key, pending === "a");
+
     if (pending === "r") {
         if (key.length === 1) {
             if (state.mode === "visual" || state.mode === "vline") {
@@ -487,6 +636,33 @@ function argument(state, host, key) {
 
     state.lastFind = {command: pending, character: key};
     return findMotion(state, host, pending, key, effectiveCount(state));
+}
+
+function applyObject(state, host, key, around) {
+    var text = host.text();
+    var object = textObject(text, caret(state, host), around, key);
+    if (!object) {
+        resetPending(state);
+        return true;
+    }
+
+    if (state.operator !== "") {
+        // A linewise object already runs past its last line break, which
+        // applyOperator would then widen by another line.
+        var end = object.linewise ? Math.max(object.start, object.end - 1) : object.end;
+        applyOperator(state, host, state.operator, object.start, end, object.linewise);
+        return true;
+    }
+
+    // Without an operator the object becomes the selection, so a second one
+    // can grow it or an operator can follow.
+    state.anchor = object.start;
+    state.head = clampNormal(text, Math.max(object.start, object.end - 1));
+    if (object.linewise)
+        state.mode = "vline";
+    showSelection(state, host);
+    resetPending(state);
+    return true;
 }
 
 function findMotion(state, host, command, character, count) {
