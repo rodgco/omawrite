@@ -35,15 +35,39 @@ all behave as they do with vim mode off.
 
 - Modes: `i` `I` `a` `A` `o` `O` to insert, `v` and `V` to select, `Esc` to
   return to normal.
-- Motions: `h` `j` `k` `l`, `w` `W` `b` `B` `e` `E`, `0` `^` `$`, `gg` `G`,
-  `{` `}`, `f` `F` `t` `T` with `;` and `,`, and `gj` / `gk` for wrapped lines.
+- Motions: `h` `j` `k` `l`, `w` `W` `b` `B` `e` `E` `ge` `gE`, `0` `^` `$`,
+  `gg` `G`, `{` `}` by paragraph, `(` `)` by sentence, and `f` `F` `t` `T`
+  with `;` and `,`.
+- `j` and `k` follow the wrapped line, so a paragraph moves the way it reads
+  on screen. `gj` and `gk` reach the logical line the Markdown has, which is
+  the mirror of vim, where `g` is the display-line prefix. Operators keep the
+  logical line either way: `dj` takes two whole paragraphs.
 - Operators: `d` `c` `y` with any motion, doubled for whole lines (`dd`, `cc`,
   `yy`), plus `D` `C` `Y` `S` `s` `x` `X` `r` `J` `~` and `p` / `P`.
+- Text objects: `iw` `aw`, `ip` `ap`, `i"` `a"`, `i'` `a'`, and the bracket
+  pairs `i(` `i[` `i{` with their `a` forms. They take a span without a
+  motion, under an operator or from visual mode.
 - Counts work throughout: `3j`, `d2w`, `2dd`.
 - `u` and `Ctrl+R` undo and redo a whole command at a time, and `.` repeats the
   last change, including the text typed during it.
 - `/` opens the app's find bar, with `n` and `N` for next and previous match.
   `Ctrl+D` and `Ctrl+U` scroll by a page.
+
+### Registers
+
+Yanks and deletes go to vim's unnamed register, which stays inside the editor:
+an `x` never costs you what you copied from a browser. `"` names a register
+for the command after it.
+
+- `"ayy` and `"ap` keep a line aside in `a`, one of `"a` to `"z`. A named yank
+  fills the unnamed register too, so a bare `p` still pastes what you last
+  took.
+- `"+y` and `"+p` are the system clipboard, for carrying text out of the
+  window and back. `"*` is the primary selection, where a middle click pastes
+  from, falling back to the clipboard on desktops without one.
+- A clipboard carries no linewise flag, so a trailing newline stands in for
+  one: `"+yy` here pastes as a whole line into another vim, and text copied
+  from elsewhere ending in a newline arrives as a line.
 
 Every `Ctrl` shortcut above keeps working in either mode.
 

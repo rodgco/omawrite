@@ -1,5 +1,7 @@
 #include <QtTest>
+#include <QClipboard>
 #include <QFont>
+#include <QGuiApplication>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -351,6 +353,62 @@ private slots:
         QCOMPARE(editor->property("unhandled").toStringList(), QStringList());
         runVim(editor.data(), QStringLiteral("x"), 0, QStringLiteral("ia"));
         QCOMPARE(editor->property("unhandled").toStringList(), QStringList{QStringLiteral("a")});
+    }
+
+    void yanksAndPastesThroughNamedRegisters() {
+        QScopedPointer<QObject> editor(createVimHarness());
+        QVERIFY(!editor.isNull());
+
+        auto clipboard = [&] { return editor->property("clipboardText").toString(); };
+
+        // "a holds a line aside while the unnamed register moves on, and "ap
+        // pastes what was put there rather than what was deleted since.
+        const VimResult aside = runVim(editor.data(), QStringLiteral("one\ntwo\nthree"), 0,
+                                       QStringLiteral("\"ayyjdd\"ap"));
+        QCOMPARE(aside.text, QStringLiteral("one\nthree\none"));
+
+        // A bare p still pastes the last thing taken, named or not.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
+                        QStringLiteral("\"ayyp")).text, QStringLiteral("one\none\ntwo"));
+
+        // Nothing reaches the system clipboard unless a register asks it to.
+        runVim(editor.data(), QStringLiteral("one\ntwo"), 0, QStringLiteral("yydd"));
+        QCOMPARE(clipboard(), QString());
+
+        // "+y does, and marks a linewise yank with the trailing newline that
+        // is all a clipboard can carry.
+        runVim(editor.data(), QStringLiteral("one\ntwo"), 0, QStringLiteral("\"+yy"));
+        QCOMPARE(clipboard(), QStringLiteral("one\n"));
+        runVim(editor.data(), QStringLiteral("alpha beta"), 0, QStringLiteral("\"+yw"));
+        QCOMPARE(clipboard(), QStringLiteral("alpha "));
+
+        // "+p reads it back, and the trailing newline makes it linewise again.
+        editor->setProperty("clipboardText", QStringLiteral("carried\n"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("one\ntwo"), 0,
+                        QStringLiteral("\"+p")).text, QStringLiteral("one\ncarried\ntwo"));
+        editor->setProperty("clipboardText", QStringLiteral("carried"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("ab"), 0,
+                        QStringLiteral("\"+p")).text, QStringLiteral("acarriedb"));
+
+        // "* is the primary selection, a different register entirely.
+        editor->setProperty("clipboardText", QString());
+        runVim(editor.data(), QStringLiteral("one\ntwo"), 0, QStringLiteral("\"*yy"));
+        QCOMPARE(editor->property("selectionText").toString(), QStringLiteral("one\n"));
+        QCOMPARE(clipboard(), QString());
+
+        // A delete into "b keeps the clipboard out of it.
+        editor->setProperty("clipboardText", QStringLiteral("untouched"));
+        QCOMPARE(runVim(editor.data(), QStringLiteral("alpha beta"), 0,
+                        QStringLiteral("\"bdw\"bP")).text, QStringLiteral("alpha beta"));
+        QCOMPARE(clipboard(), QStringLiteral("untouched"));
+
+        // The pending register shows in the footer while it waits.
+        QMetaObject::invokeMethod(editor.data(), "reset",
+                                  Q_ARG(QVariant, QStringLiteral("text")), Q_ARG(QVariant, 0));
+        QMetaObject::invokeMethod(editor.data(), "feed", Q_ARG(QVariant, QStringLiteral("\"a2")));
+        QVariant status;
+        QMetaObject::invokeMethod(editor.data(), "status", Q_RETURN_ARG(QVariant, status));
+        QCOMPARE(status.toString(), QStringLiteral("NORMAL \"a2"));
     }
 
     void runsExCommands() {
@@ -785,6 +843,21 @@ private slots:
         QVERIFY(remembered);
     }
 
+    // What "+y and "+p sit on: the clipboard, and the primary selection where
+    // the desktop has one.
+    void carriesTextThroughTheClipboard() {
+        Backend backend;
+        backend.setClipboardText(QStringLiteral("yanked\n"));
+        QCOMPARE(backend.clipboardText(), QStringLiteral("yanked\n"));
+
+        if (!QGuiApplication::clipboard()->supportsSelection())
+            QSKIP("this platform has no primary selection");
+
+        backend.setClipboardText(QStringLiteral("selected"), true);
+        QCOMPARE(backend.clipboardText(true), QStringLiteral("selected"));
+        QCOMPARE(backend.clipboardText(), QStringLiteral("yanked\n"));
+    }
+
     void vimEditsText() {
         const QString enginePath = QFINDTESTDATA("../src/VimEngine.js");
         QVERIFY(!enginePath.isEmpty());
@@ -1179,14 +1252,26 @@ private:
             import "Vim.js" as Vim
 
             TextEdit {
+                id: harness
                 property var state: Vim.createState()
                 property var host: null
                 property var unhandled: []
                 property var calls: []
                 property string message: ""
                 property bool ok: true
+                property string clipboardText: ""
+                property string selectionText: ""
 
                 Component.onCompleted: host = Vim.createHost(this, {
+                    clipboard: function(fromSelection) {
+                        return fromSelection ? harness.selectionText : harness.clipboardText;
+                    },
+                    setClipboard: function(text, toSelection) {
+                        if (toSelection)
+                            harness.selectionText = text;
+                        else
+                            harness.clipboardText = text;
+                    },
                     save: function() { record("save"); },
                     saveAs: function(path) { record("saveAs:" + path); },
                     saveAndQuit: function() { record("saveAndQuit"); },
@@ -1230,6 +1315,8 @@ private:
                 }
 
                 function mode() { return state.mode; }
+
+                function status() { return Vim.statusText(state); }
 
                 // "<Esc>", "<CR>" and "<C-r>" name the keys that are not
                 // a single character.

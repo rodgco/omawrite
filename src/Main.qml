@@ -622,6 +622,12 @@ ApplicationWindow {
                             ? editor.skipHiddenForward(position)
                             : editor.skipHiddenBackward(position);
                     },
+                    clipboard: function(selection) {
+                        return backend.clipboardText(selection);
+                    },
+                    setClipboard: function(text, selection) {
+                        backend.setClipboardText(text, selection);
+                    },
                     page: function(direction) { editor.movePage(direction, false); },
                     search: function() {
                         win.searchOpen = true;

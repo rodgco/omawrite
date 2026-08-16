@@ -20,6 +20,8 @@ function createState() {
         column: -1,         // column gj/gk aim for across short lines
         goalX: -1,          // x j/k aim for across short display lines
         register: {text: "", linewise: false},
+        registers: {},      // "a to "z, written alongside the unnamed one
+        pendingRegister: "", // register named by " for the next command
         lastFind: null,     // {command, character} for ; and ,
         lastChange: null,   // {keys, insert} replayed by .
         lastVisual: null,   // {start, end} lines behind the '<,'> range
@@ -35,7 +37,8 @@ function statusText(state) {
         : state.mode === "visual" ? "VISUAL"
         : state.mode === "vline" ? "V-LINE"
         : "NORMAL";
-    var pending = state.count + state.operator + state.operatorCount + state.pending;
+    var pending = (state.pendingRegister === "" ? "" : "\"" + state.pendingRegister)
+        + state.count + state.operator + state.operatorCount + state.pending;
     return pending.length > 0 ? label + " " + pending : label;
 }
 
@@ -101,6 +104,14 @@ function createHost(editor, hooks) {
         // moving. The application hook skips them the way the arrow keys do.
         settle: function(position, direction) {
             return hooks.settle ? hooks.settle(position, direction) : position;
+        },
+        // "+ and "* reach outside the application, so they are the one pair
+        // of registers the engine cannot hold itself.
+        clipboard: function(selection) {
+            return hooks.clipboard ? hooks.clipboard(selection) : "";
+        },
+        setClipboard: function(text, selection) {
+            if (hooks.setClipboard) hooks.setClipboard(text, selection);
         },
         page: function(direction) { if (hooks.page) hooks.page(direction); },
         search: function() { if (hooks.search) hooks.search(); },
@@ -621,6 +632,7 @@ function resetPending(state) {
     state.operatorCount = "";
     state.operator = "";
     state.pending = "";
+    state.pendingRegister = "";
 }
 
 function effectiveCount(state) {
@@ -686,7 +698,8 @@ function dispatch(state, host, key) {
         return true;
     }
 
-    if (key === "g" || key === "r" || key === "f" || key === "F" || key === "t" || key === "T") {
+    if (key === "g" || key === "r" || key === "f" || key === "F" || key === "t"
+            || key === "T" || key === "\"") {
         state.pending = key;
         return true;
     }
@@ -749,6 +762,16 @@ function argument(state, host, key) {
             return applyMotion(state, host, {position: back});
         }
         resetPending(state);
+        return true;
+    }
+
+    // " names the register the next yank, delete or paste uses. It outlives
+    // this key, so it is set without resetting the rest of the pending state.
+    if (pending === "\"") {
+        if (/^[a-z+*]$/.test(key))
+            state.pendingRegister = key;
+        else
+            resetPending(state);
         return true;
     }
 
@@ -999,6 +1022,42 @@ function verticalMove(state, text, position, delta) {
     return Math.min(start + column, lineEnd(text, start));
 }
 
+// ---------------------------------------------------------------- registers
+
+// Yanks and deletes land in the unnamed register, which stays inside the
+// editor so an x never costs you what you copied from a browser. "a to "z
+// keep text aside, and "+ and "* are the system clipboard and the primary
+// selection, for when you do mean to carry text out of the window.
+function isClipboardRegister(name) {
+    return name === "+" || name === "*";
+}
+
+function readRegister(state, host, name) {
+    if (isClipboardRegister(name)) {
+        var text = EditorMutations.normalizePlainText(host.clipboard(name === "*"));
+        // A clipboard carries no linewise flag, so a trailing newline stands
+        // in for one, which is how vim's own "+ reads a yanked line too.
+        return {text: text,
+                linewise: text !== "" && text.charAt(text.length - 1) === "\n"};
+    }
+    if (name === "")
+        return state.register;
+    return state.registers[name] || {text: "", linewise: false};
+}
+
+function writeRegister(state, host, name, text, linewise) {
+    if (isClipboardRegister(name)) {
+        host.setClipboard(linewise && text.charAt(text.length - 1) !== "\n"
+            ? text + "\n"
+            : text, name === "*");
+    } else if (name !== "") {
+        state.registers[name] = {text: text, linewise: linewise};
+    }
+    // A named yank fills the unnamed register too, so a bare p still pastes
+    // whatever was last taken.
+    state.register = {text: text, linewise: linewise};
+}
+
 // ---------------------------------------------------------------- edits
 
 function applyOperator(state, host, op, start, end, linewise) {
@@ -1017,14 +1076,14 @@ function applyOperator(state, host, op, start, end, linewise) {
         slice += "\n";
 
     if (op === "y") {
-        state.register = {text: slice, linewise: linewise};
+        writeRegister(state, host, state.pendingRegister, slice, linewise);
         if (start < (linewise ? lineStart(text, cursor) : cursor))
             host.setCursor(linewise ? firstNonBlank(text, start) : start);
         resetPending(state);
         return;
     }
 
-    state.register = {text: slice, linewise: linewise};
+    writeRegister(state, host, state.pendingRegister, slice, linewise);
 
     if (op === "c" && linewise) {
         // cc empties the line but keeps it, and keeps its indentation so
@@ -1057,14 +1116,15 @@ function applyOperator(state, host, op, start, end, linewise) {
 }
 
 function paste(state, host, after, count) {
-    if (state.register.text === "")
+    var register = readRegister(state, host, state.pendingRegister);
+    if (register.text === "")
         return;
 
     var text = host.text();
     var position = host.cursor();
-    var payload = repeatString(state.register.text, count);
+    var payload = repeatString(register.text, count);
 
-    if (state.register.linewise) {
+    if (register.linewise) {
         var at = after ? Math.min(text.length, lineEnd(text, position) + 1) : lineStart(text, position);
         var body = payload;
         // A last line without its own break needs one added ahead of the paste.
@@ -1098,7 +1158,7 @@ function deleteCharacters(state, host, forward, count) {
         : position;
     if (start === end)
         return;
-    state.register = {text: text.slice(start, end), linewise: false};
+    writeRegister(state, host, state.pendingRegister, text.slice(start, end), false);
     host.replace(start, end, "");
     host.setCursor(clampNormal(host.text(), start));
     commitChange(state);
@@ -1296,13 +1356,16 @@ function simpleCommand(state, host, key) {
     case "P":
         if (visual) {
             var range = selectionRange(state, host);
-            var register = {text: state.register.text, linewise: state.register.linewise};
+            // Read before the delete, which writes the replaced text to the
+            // unnamed register the way vim does.
+            var incoming = readRegister(state, host, state.pendingRegister);
             state.mode = "normal";
             state.anchor = -1;
             state.head = -1;
+            state.pendingRegister = "";
             host.deselect();
             applyOperator(state, host, "d", range.start, range.end, range.linewise);
-            state.register = register;
+            state.register = incoming;
             paste(state, host, false, count);
             resetPending(state);
             return true;

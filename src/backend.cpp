@@ -382,18 +382,26 @@ QString Backend::clipboardUrl() const {
     return normalizedLinkUrl(mimeData->text());
 }
 
-QString Backend::clipboardText() const {
+// The "* register is the primary selection, where a middle click pastes from.
+// Desktops without one fall back to the clipboard, so "* still does something
+// rather than nothing.
+static QClipboard::Mode clipboardMode(const QClipboard *clipboard, bool selection) {
+    return selection && clipboard->supportsSelection() ? QClipboard::Selection
+                                                       : QClipboard::Clipboard;
+}
+
+QString Backend::clipboardText(bool selection) const {
     const QClipboard *clipboard = QGuiApplication::clipboard();
     if (!clipboard)
         return {};
 
-    const QMimeData *mimeData = clipboard->mimeData();
+    const QMimeData *mimeData = clipboard->mimeData(clipboardMode(clipboard, selection));
     return mimeData && mimeData->hasText() ? mimeData->text() : QString();
 }
 
-void Backend::setClipboardText(const QString &text) const {
+void Backend::setClipboardText(const QString &text, bool selection) const {
     if (QClipboard *clipboard = QGuiApplication::clipboard())
-        clipboard->setText(text);
+        clipboard->setText(text, clipboardMode(clipboard, selection));
 }
 
 // Replace a range as one edit block, so a single undo reverts the whole
