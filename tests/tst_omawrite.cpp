@@ -531,6 +531,62 @@ private slots:
         QCOMPARE(editor->property("text").toString(), QStringLiteral("dxbeta"));
     }
 
+    void walksDisplayLinesWithJAndK() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        backend.setVimMode(true);
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->resize(420, 400);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        // One paragraph per line, long enough that the first one wraps.
+        const QString first = QStringLiteral(
+            "The paragraph runs on well past the width of the window so that it "
+            "has to wrap onto a second display line before it ends.");
+        editor->setProperty("text", first + QStringLiteral("\nSecond paragraph."));
+        editor->setProperty("cursorPosition", 0);
+        QVERIFY(editor->property("width").toReal() > 0);
+
+        // j follows the wrapped text, so it stays inside the first paragraph
+        // rather than jumping over the whole of it.
+        QTest::keyClick(window, Qt::Key_J);
+        const int afterJ = editor->property("cursorPosition").toInt();
+        QVERIFY2(afterJ > 0 && afterJ < first.length(),
+                 qPrintable(QStringLiteral("j landed at %1, outside the first paragraph")
+                                .arg(afterJ)));
+
+        // k comes back to where it started, holding the goal column.
+        QTest::keyClick(window, Qt::Key_K);
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+
+        // gj is the logical line, so it reaches the second paragraph in one.
+        editor->setProperty("cursorPosition", 0);
+        QTest::keyClick(window, Qt::Key_G);
+        QTest::keyClick(window, Qt::Key_J);
+        QCOMPARE(editor->property("cursorPosition").toInt(), first.length() + 1);
+
+        // An operator over j stays logical: dj takes both whole paragraphs,
+        // never half of the wrapped one.
+        editor->setProperty("cursorPosition", 0);
+        QTest::keyClick(window, Qt::Key_D);
+        QTest::keyClick(window, Qt::Key_J);
+        QCOMPARE(editor->property("text").toString(), QString());
+    }
+
     void opensTheCommandLineFromTheEditor() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());

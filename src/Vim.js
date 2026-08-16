@@ -17,7 +17,8 @@ function createState() {
         pending: "",        // key awaiting an argument: g, r, f, F, t, T
         anchor: -1,         // fixed end of the visual selection
         head: -1,           // moving end of the visual selection
-        column: -1,         // column j/k aim for across short lines
+        column: -1,         // column gj/gk aim for across short lines
+        goalX: -1,          // x j/k aim for across short display lines
         register: {text: "", linewise: false},
         lastFind: null,     // {command, character} for ; and ,
         lastChange: null,   // {keys, insert} replayed by .
@@ -59,12 +60,37 @@ function createHost(editor, hooks) {
         },
         undo: function() { editor.undo(); },
         redo: function() { editor.redo(); },
-        // A screen line up or down, for gj and gk under wrapped paragraphs.
-        displayLine: function(position, delta) {
-            var rect = editor.cursorRectangle;
-            if (rect.height <= 0)
-                return position;
-            return editor.positionAt(rect.x, rect.y + rect.height * (delta + 0.5));
+        // A screen line up or down, which is what j and k follow so a wrapped
+        // paragraph moves the way it reads. The document is set in 140% line
+        // spacing, and the leading between lines is dead space where
+        // positionAt resolves a column badly, so scan for the neighbouring
+        // line's rectangle first and then read the column at its centre.
+        // Finding no further line means the edge of the document, and the
+        // caret stays where it is.
+        displayLine: function(position, direction, count, goalX) {
+            var x = goalX >= 0 ? goalX : editor.positionToRectangle(position).x;
+            var at = position;
+            for (var i = 0; i < count; i++) {
+                var rect = editor.positionToRectangle(at);
+                if (rect.height <= 0)
+                    break;
+                var step = Math.max(2, rect.height / 2);
+                var found = -1;
+                for (var probe = step; probe <= rect.height * 4; probe += step) {
+                    var y = direction > 0 ? rect.y + rect.height + probe : rect.y - probe;
+                    if (y < 0)
+                        break;
+                    var line = editor.positionToRectangle(editor.positionAt(x, y));
+                    if (line.y !== rect.y) {
+                        found = editor.positionAt(x, line.y + line.height / 2);
+                        break;
+                    }
+                }
+                if (found < 0)
+                    break;
+                at = found;
+            }
+            return {position: at, goalX: x};
         },
         // Grouping every command into one undo step keeps u the inverse of
         // the command that ran, rather than of the edits it happened to make.
@@ -699,9 +725,14 @@ function argument(state, host, key) {
                 : lineNumberPosition(host.text(), effectiveCount(state));
             return applyMotion(state, host, {position: target, linewise: true, toFirstNonBlank: true});
         }
+        // gj and gk are the logical-line motions, the mirror of vim, where
+        // they are the display-line ones: here j and k already follow the
+        // wrapped text, so g is what reaches the line the Markdown has.
         if (key === "j" || key === "k") {
             var delta = key === "j" ? effectiveCount(state) : -effectiveCount(state);
-            return applyMotion(state, host, {position: host.displayLine(caret(state, host), delta)});
+            return applyMotion(state, host,
+                               {position: verticalMove(state, host.text(), caret(state, host), delta),
+                                keepColumn: true, linewise: true});
         }
         if (key === "e" || key === "E") {
             var text = host.text();
@@ -836,8 +867,10 @@ function applyMotion(state, host, motion) {
 
     var position = motion.toFirstNonBlank ? firstNonBlank(text, motion.position) : motion.position;
     moveCaret(state, host, host.settle(position, position >= origin ? 1 : -1));
-    if (!motion.keepColumn)
+    if (!motion.keepColumn) {
         state.column = -1;
+        state.goalX = -1;
+    }
     resetPending(state);
     return true;
 }
@@ -860,11 +893,21 @@ function evaluateMotion(state, host, key, count) {
                                    stepForward(text, position, count))};
     case "j":
     case "Down":
-    case "Return":
-        return {position: verticalMove(state, text, position, count), keepColumn: true, linewise: true};
     case "k":
     case "Up":
-        return {position: verticalMove(state, text, position, -count), keepColumn: true, linewise: true};
+        var down = key === "j" || key === "Down";
+        // An operator over j or k takes whole lines, the way it does in vim,
+        // where the display-line form is dgj. A bare j or k follows the
+        // wrapped text instead, which is how a paragraph reads on screen.
+        if (state.operator !== "")
+            return {position: verticalMove(state, text, position, down ? count : -count),
+                    keepColumn: true, linewise: true};
+        var moved = host.displayLine(position, down ? 1 : -1, count, state.goalX);
+        state.goalX = moved.goalX;
+        return {position: moved.position, keepColumn: true};
+    case "Return":
+        return {position: verticalMove(state, text, position, count),
+                linewise: true, toFirstNonBlank: true};
     case "w":
     case "W":
         // cw is vim's odd one out: on a non-blank it changes to the end of
