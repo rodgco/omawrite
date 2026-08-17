@@ -349,8 +349,14 @@ bool Backend::editorTextChanged() {
 
     if (m_document) {
         const int blockCount = m_document->blockCount();
-        if (blockCount > m_formattedBlockCount)
-            reapplyTypographyToChange();
+        // Undo and redo replay commands that already carry their formatting, and
+        // appending to the stack from here would throw the redo half of it away.
+        if (!m_navigatingHistory) {
+            if (blockCount > m_formattedBlockCount)
+                reapplyTypographyToChange();
+            else if (lastChangeEndedAWord())
+                endUndoRun();
+        }
         m_formattedBlockCount = blockCount;
     }
 
@@ -741,26 +747,65 @@ void Backend::applyDocumentTypography() {
     m_formattedBlockCount = m_document->blockCount();
 }
 
-void Backend::reapplyTypographyToChange() {
-    if (!m_document)
-        return;
-
+void Backend::joinTypographyEdit(int start, int end) {
     QTextBlockFormat blockFormat;
     blockFormat.setLineHeight(typoraLineHeightPercent, QTextBlockFormat::ProportionalHeight);
 
-    // Format only the block(s) touched by the last edit instead of the whole
-    // document, and fold the change into the preceding edit command so a single
-    // undo reverts both the text and its formatting.
     const int maxPos = m_document->characterCount() - 1;
-    const int start = qBound(0, m_lastChangePos, maxPos);
-    const int end = qBound(start, m_lastChangePos + m_lastChangeAdded, maxPos);
+    const int from = qBound(0, start, maxPos);
+    const int to = qBound(from, end, maxPos);
 
     m_formattingTypography = true;
     QTextCursor cursor(m_document);
     cursor.joinPreviousEditBlock();
-    cursor.setPosition(start);
-    cursor.setPosition(end, QTextCursor::KeepAnchor);
+    cursor.setPosition(from);
+    cursor.setPosition(to, QTextCursor::KeepAnchor);
     cursor.mergeBlockFormat(blockFormat);
     cursor.endEditBlock();
     m_formattingTypography = false;
+}
+
+void Backend::reapplyTypographyToChange() {
+    if (!m_document)
+        return;
+
+    // Format only the block(s) touched by the last edit instead of the whole
+    // document, and fold the change into the preceding edit command so a single
+    // undo reverts both the text and its formatting.
+    joinTypographyEdit(m_lastChangePos, m_lastChangePos + m_lastChangeAdded);
+}
+
+int Backend::lastChangeEdge() const {
+    // Insertions leave the caret after the typed text; deletions leave it where
+    // the removed text was.
+    return m_lastChangeAdded > 0 ? m_lastChangePos + m_lastChangeAdded : m_lastChangePos;
+}
+
+bool Backend::lastChangeEndedAWord() const {
+    // The character in front of the caret is the one that says whether the
+    // writer just finished a word, whether they typed it or backspaced onto it.
+    const int edge = lastChangeEdge();
+    return edge > 0 && m_document->characterAt(edge - 1).isSpace();
+}
+
+void Backend::endUndoRun() {
+    if (!m_document)
+        return;
+
+    // Qt folds consecutive keystrokes into one undo command with no upper bound,
+    // so a single Ctrl+Z can swallow everything typed since the document was
+    // opened and leave the caret at the top of it. Re-applying the line height a
+    // block already carries appends a formatting-only command that ends the run,
+    // so the next keystroke starts a fresh one and undo steps back a word at a
+    // time. The marker changes no text of its own; Main.qml steps past it.
+    const int edge = lastChangeEdge();
+    joinTypographyEdit(edge, edge);
+}
+
+void Backend::beginHistoryNavigation() {
+    m_navigatingHistory = true;
+}
+
+void Backend::endHistoryNavigation() {
+    m_navigatingHistory = false;
 }

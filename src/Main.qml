@@ -211,13 +211,13 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+Z"
         context: Qt.WindowShortcut
-        onActivated: editor.undo()
+        onActivated: editor.undoEdit()
     }
 
     Shortcut {
         sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]
         context: Qt.WindowShortcut
-        onActivated: editor.redo()
+        onActivated: editor.redoEdit()
     }
 
     Shortcut {
@@ -560,6 +560,28 @@ ApplicationWindow {
                 }
                 onCursorRectangleChanged: editorFlick.ensureCursorVisible()
 
+                // The backend ends an undo run by re-applying formatting the
+                // text already has, which keeps undo word-sized but leaves
+                // steps that change nothing on screen. Walk past those so every
+                // press moves the writing, not just the undo stack.
+                function undoEdit() {
+                    backend.beginHistoryNavigation();
+                    var before = text;
+                    do {
+                        undo();
+                    } while (canUndo && text === before);
+                    backend.endHistoryNavigation();
+                }
+
+                function redoEdit() {
+                    backend.beginHistoryNavigation();
+                    var before = text;
+                    do {
+                        redo();
+                    } while (canRedo && text === before);
+                    backend.endHistoryNavigation();
+                }
+
                 function replaceSelectionWith(replacement) {
                     var start = Math.min(selectionStart, selectionEnd);
                     var end = Math.max(selectionStart, selectionEnd);
@@ -742,6 +764,27 @@ ApplicationWindow {
                     if (pasteKey || shiftInsert) {
                         if (!pasteClipboardUrlAsMarkdownLink())
                             pasteClipboardAsPlainText();
+                        event.accepted = true;
+                        return;
+                    }
+
+                    // TextEdit claims the undo and redo keys as built-in text
+                    // editing shortcuts, so the Shortcut items above never see
+                    // them while the editor has focus. Take them here instead,
+                    // where they can go through undoEdit()/redoEdit().
+                    var undoModifier = (event.modifiers & Qt.ControlModifier)
+                        && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier));
+                    if (undoModifier && event.key === Qt.Key_Z) {
+                        if (event.modifiers & Qt.ShiftModifier)
+                            redoEdit();
+                        else
+                            undoEdit();
+                        event.accepted = true;
+                        return;
+                    }
+                    if (undoModifier && !(event.modifiers & Qt.ShiftModifier)
+                        && event.key === Qt.Key_Y) {
+                        redoEdit();
                         event.accepted = true;
                         return;
                     }

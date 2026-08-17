@@ -3,7 +3,10 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQuickItem>
 #include <QQuickStyle>
+#include <QQuickWindow>
+#include <QStandardPaths>
 
 #include "backend.h"
 #include "markdownhighlighter.h"
@@ -14,6 +17,9 @@ class OmawriteTest : public QObject {
 private slots:
     void initTestCase() {
         QVERIFY(m_settingsDirectory.isValid());
+        // Keep recovery snapshots out of the state directory of the copy of
+        // Omawrite the developer is writing in.
+        QStandardPaths::setTestModeEnabled(true);
         QQuickStyle::setStyle(QStringLiteral("Material"));
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
@@ -160,6 +166,53 @@ private slots:
                  QStringLiteral("alpha **beta** omega"));
         QCOMPARE(editor->property("wrappedSelectionStart").toInt(), 8);
         QCOMPARE(editor->property("wrappedSelectionEnd").toInt(), 12);
+    }
+
+    void undoesTypingAWordAtATime() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        auto *quickWindow = qobject_cast<QQuickWindow *>(window.data());
+        QVERIFY(quickWindow);
+        QVERIFY(QTest::qWaitForWindowExposed(quickWindow));
+
+        QQuickItem *editor = window->findChild<QQuickItem *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        editor->forceActiveFocus();
+        QCOMPARE(editor->property("text").toString(), QString());
+
+        for (char letter : QByteArray("one two three"))
+            QTest::keyClick(quickWindow, letter);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("one two three"));
+
+        // Qt would otherwise merge the whole run of keystrokes into one undo
+        // command, so a single Ctrl+Z threw away everything typed and left the
+        // caret at the top of the document.
+        QTest::keyClick(quickWindow, Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("one two "));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 8);
+
+        QTest::keyClick(quickWindow, Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("one "));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 4);
+
+        // And every press of redo puts a word back, rather than stalling on the
+        // formatting-only edits that mark where one word ends.
+        QTest::keyClick(quickWindow, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("one two "));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 8);
+
+        QTest::keyClick(quickWindow, Qt::Key_Y, Qt::ControlModifier);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("one two three"));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 13);
     }
 
     void savesAndOpensFromFooterButtons() {

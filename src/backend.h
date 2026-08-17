@@ -69,6 +69,8 @@ public:
     Q_INVOKABLE QString clipboardUrl() const;
     Q_INVOKABLE QString clipboardText() const;
     Q_INVOKABLE bool editorTextChanged();
+    Q_INVOKABLE void beginHistoryNavigation();
+    Q_INVOKABLE void endHistoryNavigation();
     Q_INVOKABLE QVariantList hiddenRangesAt(int position) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
     Q_INVOKABLE void openExternalUrl(const QUrl &url);
@@ -101,7 +103,11 @@ private:
     void refreshWordCount();
     void scheduleWordCount();
     void applyDocumentTypography();
+    void joinTypographyEdit(int start, int end);
     void reapplyTypographyToChange();
+    int lastChangeEdge() const;
+    bool lastChangeEndedAWord() const;
+    void endUndoRun();
     void scheduleRecovery();
     void writeRecovery();
     void restoreRecovery();
@@ -120,6 +126,7 @@ private:
     bool m_loading = false;
     bool m_closeAfterSave = false;
     bool m_formattingTypography = false;
+    bool m_navigatingHistory = false;
     int m_formattedBlockCount = 0;
     int m_lastChangePos = 0;
     int m_lastChangeAdded = 0;
