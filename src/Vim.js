@@ -75,8 +75,11 @@ function createHost(editor, hooks) {
         replace: function(start, end, replacement) {
             EditorMutations.replaceRange(editor, start, end, replacement);
         },
-        undo: function() { editor.undo(); },
-        redo: function() { editor.redo(); },
+        // The editor's own undo, not the document's: undo runs are ended by
+        // formatting-only edits that u would otherwise stop on, spending a
+        // press without changing a character.
+        undo: function() { editor.undoEdit(); },
+        redo: function() { editor.redoEdit(); },
         // A screen line up or down, which is what j and k follow so a wrapped
         // paragraph moves the way it reads. The document is set in 140% line
         // spacing, and the leading between lines is dead space where
