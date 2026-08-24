@@ -648,6 +648,22 @@ private slots:
         QCOMPARE(grown.text, QStringLiteral("one a\nb\ntwo a\nb\nthree"));
         QCOMPARE(grown.cursor, 14);
 
+        // A pattern that backtracks catastrophically stops rather than
+        // hanging the window. QML's JS engine compiles RegExp through PCRE2,
+        // whose match limit bounds the work: the same expression that runs
+        // for hours under V8 gives up here in milliseconds and reports no
+        // match. The line is long enough that an unbounded engine would not
+        // finish this test.
+        QElapsedTimer pathological;
+        pathological.start();
+        const VimResult bounded = runEx(editor.data(),
+                                        QString(2000, QLatin1Char('a')) + QStringLiteral("b"), 0,
+                                        QStringLiteral(":s/(a+)+$/z/"));
+        const qint64 spent = pathological.elapsed();
+        QVERIFY(!bounded.ok);
+        QCOMPARE(bounded.message, QStringLiteral("Pattern not found: (a+)+$"));
+        QVERIFY2(spent < 2000, qPrintable(QStringLiteral("substitute took %1 ms").arg(spent)));
+
         // Reported outcomes, including the ones that change nothing.
         QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":%s/fish/cat/")).message,
                  QStringLiteral("4 substitutions on 4 lines"));
