@@ -1802,6 +1802,7 @@ function substitute(state, host, range, separator, body) {
     var replaced = 0;
     var changedLines = 0;
     var landing = -1;
+    var added = 0;
 
     withEditBlock(host, function() {
         // Bottom up, so replacing a line cannot shift the lines still to come.
@@ -1822,6 +1823,13 @@ function substitute(state, host, range, separator, body) {
             host.replace(start, end, updated);
             replaced += here;
             changedLines++;
+            // A replacement may carry \n, and a source line never does, so
+            // this is what the edit added. Every edit still to come is above
+            // this one and pushes the landing line down; an edit on the
+            // landing line itself extends the change downwards. Vim leaves
+            // the caret on the last line the substitution changed, so both
+            // count the same way.
+            added += updated.split("\n").length - 1;
             // Running bottom up, the first line reached with a match is the last
             // one in the file, which is where vim leaves the caret.
             if (landing < 0)
@@ -1832,7 +1840,7 @@ function substitute(state, host, range, separator, body) {
     if (replaced === 0)
         return {ok: false, message: "Pattern not found: " + pattern};
 
-    gotoLine(host, landing);
+    gotoLine(host, landing + added);
     return {ok: true,
             message: replaced > 1
                 ? replaced + " substitutions on " + changedLines

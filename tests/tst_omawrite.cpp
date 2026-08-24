@@ -638,6 +638,16 @@ private slots:
         QCOMPARE(swept.text, QStringLiteral("z\nb\nz\nb\nz"));
         QCOMPARE(swept.cursor, 8);
 
+        // A replacement carrying \n moves the line it was recorded on: the
+        // edits above it push it down, and its own new lines extend the
+        // change past it. Vim lands on the last line of the whole change,
+        // which here is the second b rather than the line where it started.
+        const VimResult grown = runEx(editor.data(),
+                                      QStringLiteral("one x\ntwo x\nthree"), 0,
+                                      QStringLiteral(":%s/x/a\\nb/"));
+        QCOMPARE(grown.text, QStringLiteral("one a\nb\ntwo a\nb\nthree"));
+        QCOMPARE(grown.cursor, 14);
+
         // Reported outcomes, including the ones that change nothing.
         QCOMPARE(runEx(editor.data(), document, 0, QStringLiteral(":%s/fish/cat/")).message,
                  QStringLiteral("4 substitutions on 4 lines"));
