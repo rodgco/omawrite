@@ -701,6 +701,22 @@ function effectiveCount(state) {
     return Math.max(1, outer * inner);
 }
 
+// A command is one edit block, so that one u undoes the command rather than
+// the several edits that carried it out. A block left open is not a lost
+// command but a lost session: the document holds its change signal back, so
+// TextEdit.text freezes and onTextChanged never runs again — no modified
+// flag, no word count, no search refresh and no recovery draft, while the
+// writer keeps typing into what looks like a working editor. Nothing leaves
+// this function without closing the block, including a throw on its way out.
+function withEditBlock(host, body) {
+    host.beginChange();
+    try {
+        return body();
+    } finally {
+        host.endChange();
+    }
+}
+
 function commitChange(state) {
     if (!state.replaying && state.mode !== "visual" && state.mode !== "vline")
         state.lastChange = {keys: state.keys.slice(), insert: null};
@@ -727,14 +743,18 @@ function handleKey(state, host, key) {
             state.keys.push(key);
     }
 
-    host.beginChange();
-    var handled = dispatch(state, host, key);
-    // Closing the edit block replays the change to the editor, which remaps
-    // the caret from where it stood when the edit began and so undoes where
-    // the command meant to leave it. Put it back, but never while a visual
-    // selection is up, since moving the caret would drop it.
-    var intended = host.cursor();
-    host.endChange();
+    var intended = -1;
+    var handled = withEditBlock(host, function() {
+        var done = dispatch(state, host, key);
+        // Closing the edit block replays the change to the editor, which
+        // remaps the caret from where it stood when the edit began and so
+        // undoes where the command meant to leave it. Read where the command
+        // wanted the caret while the block is still open.
+        intended = host.cursor();
+        return done;
+    });
+    // Put it back, but never while a visual selection is up, since moving the
+    // caret would drop it.
     if (state.mode !== "visual" && state.mode !== "vline" && host.cursor() !== intended)
         host.setCursor(intended);
     return handled;
@@ -1750,9 +1770,9 @@ function deleteRange(state, host, range) {
     var text = host.text();
     var start = lineNumberPosition(text, range.start);
     var end = lineNumberPosition(text, range.end);
-    host.beginChange();
-    applyOperator(state, host, "d", start, end, true);
-    host.endChange();
+    withEditBlock(host, function() {
+        applyOperator(state, host, "d", start, end, true);
+    });
     var lines = range.end - range.start + 1;
     return {ok: true, message: lines > 1 ? lines + " fewer lines" : ""};
 }
@@ -1783,31 +1803,31 @@ function substitute(state, host, range, separator, body) {
     var changedLines = 0;
     var landing = -1;
 
-    host.beginChange();
-    // Bottom up, so replacing a line cannot shift the lines still to come.
-    for (var line = range.end; line >= range.start; line--) {
-        var text = host.text();
-        var start = lineNumberPosition(text, line);
-        var end = lineEnd(text, start);
-        var source = text.slice(start, end);
-        var here = 0;
-        var updated = source.replace(expression, function(whole) {
-            if (!everyMatch && here > 0)
-                return whole;
-            here++;
-            return expandReplacement(replacement, arguments);
-        });
-        if (here === 0)
-            continue;
-        host.replace(start, end, updated);
-        replaced += here;
-        changedLines++;
-        // Running bottom up, the first line reached with a match is the last
-        // one in the file, which is where vim leaves the caret.
-        if (landing < 0)
-            landing = line;
-    }
-    host.endChange();
+    withEditBlock(host, function() {
+        // Bottom up, so replacing a line cannot shift the lines still to come.
+        for (var line = range.end; line >= range.start; line--) {
+            var text = host.text();
+            var start = lineNumberPosition(text, line);
+            var end = lineEnd(text, start);
+            var source = text.slice(start, end);
+            var here = 0;
+            var updated = source.replace(expression, function(whole) {
+                if (!everyMatch && here > 0)
+                    return whole;
+                here++;
+                return expandReplacement(replacement, arguments);
+            });
+            if (here === 0)
+                continue;
+            host.replace(start, end, updated);
+            replaced += here;
+            changedLines++;
+            // Running bottom up, the first line reached with a match is the last
+            // one in the file, which is where vim leaves the caret.
+            if (landing < 0)
+                landing = line;
+        }
+    });
 
     if (replaced === 0)
         return {ok: false, message: "Pattern not found: " + pattern};

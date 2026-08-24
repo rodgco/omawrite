@@ -487,6 +487,24 @@ private slots:
         QScopedPointer<QObject> editor(createVimHarness());
         QVERIFY(!editor.isNull());
 
+        // A command that throws partway through still closes its block. Left
+        // open, the document would hold its change signal for the rest of the
+        // session: the text the engine reads freezes, and so does everything
+        // hanging off onTextChanged, while the writer keeps typing.
+        QMetaObject::invokeMethod(editor.data(), "reset",
+                                  Q_ARG(QVariant, QStringLiteral("alpha")),
+                                  Q_ARG(QVariant, 0));
+        editor->setProperty("hookThrows", true);
+        QMetaObject::invokeMethod(editor.data(), "feedThrough",
+                                  Q_ARG(QVariant, QStringLiteral("\"+p")));
+        QVERIFY(editor->property("threw").toBool());
+        QCOMPARE(editor->property("blockDepth").toInt(), 0);
+
+        // And the next command edits the document rather than a frozen copy.
+        editor->setProperty("hookThrows", false);
+        QMetaObject::invokeMethod(editor.data(), "feed", Q_ARG(QVariant, QStringLiteral("x")));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("lpha"));
+
         // The second edit of a repeat lands past where the document ended
         // when the block opened. Clamping it to the stale length would drop
         // it back inside the old text and mangle both.
@@ -1244,6 +1262,9 @@ private:
                 property var linkPasteCalls: []
                 property int blockDepth: 0
                 property string frozenText: ""
+                // Stands in for a hook failing partway through a command.
+                property bool hookThrows: false
+                property bool threw: false
 
                 property var blockedEditor: ({
                     get text() {
@@ -1287,6 +1308,8 @@ private:
                         return false;
                     },
                     clipboard: function(fromSelection) {
+                        if (harness.hookThrows)
+                            throw new Error("hook failed");
                         return fromSelection ? harness.selectionText : harness.clipboardText;
                     },
                     setClipboard: function(text, toSelection) {
@@ -1313,6 +1336,7 @@ private:
                     linkPasteCalls = [];
                     message = "";
                     ok = true;
+                    threw = false;
                     text = startText;
                     cursorPosition = startCursor;
                 }
@@ -1321,6 +1345,14 @@ private:
                     var result = Vim.runCommand(state, host, command);
                     message = result.message;
                     ok = result.ok;
+                }
+
+                function feedThrough(sequence) {
+                    try {
+                        feed(sequence);
+                    } catch (error) {
+                        threw = true;
+                    }
                 }
 
                 function feed(sequence) {
