@@ -1502,6 +1502,12 @@ function simpleCommand(state, host, key) {
             // half the selection.
             if (key === "p" && count === 1 && !incoming.linewise && !range.linewise
                     && host.linkPaste(range.start, range.end, incoming.text, register)) {
+                // The same two steps the plain path below takes on its way
+                // out: what was pasted becomes the unnamed register, and the
+                // command is the last change. Skipping them left . replaying
+                // whatever came before — a dd here takes out a line.
+                state.register = incoming;
+                commitChange(state);
                 resetPending(state);
                 return true;
             }

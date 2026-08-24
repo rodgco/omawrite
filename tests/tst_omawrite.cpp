@@ -866,6 +866,21 @@ private slots:
         typeInto(window, QStringLiteral("p"));
         QCOMPARE(text(), QStringLiteral("read the [docs](https://example.com) here"));
 
+        // A link paste is a change like any other, and . repeats it. Before
+        // it recorded itself, . replayed whatever was recorded last — here a
+        // dd, which took a line out of the document instead.
+        backend.setClipboardText(QStringLiteral("https://example.com"));
+        load(QStringLiteral("one\nread the docs here"), 0);
+        typeInto(window, QStringLiteral("dd"));
+        QCOMPARE(text(), QStringLiteral("read the docs here"));
+        editor->setProperty("cursorPosition", 9);
+        typeInto(window, QStringLiteral("ve\"+p"));
+        QCOMPARE(text(), QStringLiteral("read the [docs](https://example.com) here"));
+        editor->setProperty("cursorPosition", 0);
+        typeInto(window, QStringLiteral("."));
+        QCOMPARE(text(),
+                 QStringLiteral("rhttps://example.comead the [docs](https://example.com) here"));
+
         // P is the literal paste, so there is a way to mean the text itself.
         load(QStringLiteral("read the docs here"), 9);
         typeInto(window, QStringLiteral("ve\"+P"));
