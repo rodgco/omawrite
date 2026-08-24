@@ -276,25 +276,28 @@ function wordBackward(text, position, big) {
 }
 
 function wordEnd(text, position, big) {
-    var i = clamp(text, position) + 1;
+    var i = stepForward(text, position, 1);
     while (i < text.length && charClass(text.charAt(i), big) === 0)
-        i++;
+        i = stepForward(text, i, 1);
     if (i >= text.length)
-        return Math.max(0, text.length - 1);
+        return stepBackward(text, text.length, 1);
     var start = charClass(text.charAt(i), big);
-    while (i + 1 < text.length && charClass(text.charAt(i + 1), big) === start)
-        i++;
+    var next = stepForward(text, i, 1);
+    while (next < text.length && charClass(text.charAt(next), big) === start) {
+        i = next;
+        next = stepForward(text, i, 1);
+    }
     return i;
 }
 
 function wordEndBackward(text, position, big) {
-    var i = position - 1;
+    var i = stepBackward(text, position, 1);
     var start = charClass(text.charAt(position), big);
     if (start !== 0)
-        while (i >= 0 && charClass(text.charAt(i), big) === start)
-            i--;
-    while (i >= 0 && charClass(text.charAt(i), big) === 0)
-        i--;
+        while (i > 0 && charClass(text.charAt(i), big) === start)
+            i = stepBackward(text, i, 1);
+    while (i > 0 && charClass(text.charAt(i), big) === 0)
+        i = stepBackward(text, i, 1);
     return Math.max(0, i);
 }
 
@@ -302,7 +305,7 @@ function wordEndBackward(text, position, big) {
 // running on to the end of the next one.
 function changeWordEnd(text, position, big) {
     var here = charClass(text.charAt(position), big);
-    if (here !== 0 && charClass(text.charAt(position + 1), big) !== here)
+    if (here !== 0 && charClass(text.charAt(stepForward(text, position, 1)), big) !== here)
         return position;
     return wordEnd(text, position, big);
 }
@@ -561,9 +564,9 @@ function showSelection(state, host) {
         else
             host.select(from, to);
     } else if (head >= anchor) {
-        host.select(anchor, Math.min(text.length, head + 1));
+        host.select(anchor, stepForward(text, head, 1));
     } else {
-        host.select(Math.min(text.length, anchor + 1), head);
+        host.select(stepForward(text, anchor, 1), head);
     }
 }
 
@@ -573,7 +576,7 @@ function selectionRange(state, host) {
     var to = Math.max(state.anchor, state.head);
     if (state.mode === "vline")
         return {start: from, end: to, linewise: true};
-    return {start: from, end: Math.min(text.length, to + 1), linewise: false};
+    return {start: from, end: stepForward(text, to, 1), linewise: false};
 }
 
 // ---------------------------------------------------------------- modes
@@ -820,7 +823,7 @@ function argument(state, host, key) {
                 // ge is inclusive, and it runs backwards, so the operator
                 // takes the caret's own character along with the span.
                 applyOperator(state, host, state.operator, back,
-                              Math.min(text.length, host.cursor() + 1), false);
+                              stepForward(text, host.cursor(), 1), false);
                 return true;
             }
             return applyMotion(state, host, {position: back});
@@ -964,7 +967,7 @@ function applyMotion(state, host, motion) {
         var to = motion.position;
         var linewise = !!motion.linewise;
         if (motion.inclusive && to >= from) {
-            to = Math.min(text.length, to + 1);
+            to = stepForward(text, to, 1);
         } else if (!linewise && to > from && to === lineStart(text, to)
                    && to > lineEnd(text, from)) {
             // An exclusive motion that lands in column one stops at the end

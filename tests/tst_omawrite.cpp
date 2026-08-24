@@ -266,6 +266,21 @@ private slots:
         QCOMPARE(runVim(editor.data(), emoji, 1, QStringLiteral("rz")).text,
                  QStringLiteral("azb"));
 
+        // A visual range and the word-end motions count characters too. Both
+        // feed operators, so a stray half of a pair would go to disk on the
+        // next save rather than stopping at a caret that looks wrong.
+        QCOMPARE(runVim(editor.data(), emoji, 0, QStringLiteral("lvd")).text,
+                 QStringLiteral("ab"));
+        const QString spacedEmoji = QStringLiteral("a\U0001F600 b");
+        QCOMPARE(runVim(editor.data(), spacedEmoji, 0, QStringLiteral("le")).cursor, 4);
+        QCOMPARE(runVim(editor.data(), spacedEmoji, 0, QStringLiteral("de")).text,
+                 QStringLiteral(" b"));
+        QCOMPARE(runVim(editor.data(), spacedEmoji, 4, QStringLiteral("ge")).cursor, 1);
+        QCOMPARE(runVim(editor.data(), spacedEmoji, 4, QStringLiteral("gex")).text,
+                 QStringLiteral("a b"));
+        QCOMPARE(runVim(editor.data(), spacedEmoji, 4, QStringLiteral("dge")).text,
+                 QStringLiteral("a"));
+
         // j and k hold the column they started from across a short line.
         QCOMPARE(runVim(editor.data(), QStringLiteral("abcdef\nx\nabcdef"), 4,
                         QStringLiteral("jj")).cursor, 13);
