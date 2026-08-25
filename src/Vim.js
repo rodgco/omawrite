@@ -374,13 +374,13 @@ function findInLine(text, position, command, character, count, repeated) {
     var end = lineEnd(text, position);
     var i = position;
     for (var found = 0; found < count; found++) {
-        var from = forward ? i + 1 : i - 1;
+        var from = forward ? stepForward(text, i, 1) : stepBackward(text, i, 1);
         // A repeated t or T already sits one short of its target, so it would
         // find the same one again and stand still. A fresh press would not.
         if (repeated && command === "t" && text.charAt(from) === character)
-            from = i + 2;
+            from = stepForward(text, i, 2);
         else if (repeated && command === "T" && text.charAt(from) === character)
-            from = i - 2;
+            from = stepBackward(text, i, 2);
         if (forward) {
             i = text.indexOf(character, from);
             if (i < 0 || i >= end)
@@ -391,10 +391,12 @@ function findInLine(text, position, command, character, count, repeated) {
                 return -1;
         }
     }
+    // One character short of the target, not one code unit: the caret has to
+    // land on a character or the next x writes half of one to the document.
     if (command === "t")
-        return i - 1;
+        return stepBackward(text, i, 1);
     if (command === "T")
-        return i + 1;
+        return stepForward(text, i, 1);
     return i;
 }
 
@@ -1124,7 +1126,12 @@ function evaluateMotion(state, host, key, count) {
 // j and k walk logical lines, as in vim, and hold the column they started
 // from so passing through a short line does not drag the caret left.
 function verticalMove(state, text, position, delta) {
-    var column = state.column >= 0 ? state.column : position - lineStart(text, position);
+    // Characters across, not code units: a column counted in units and then
+    // measured out on a line holding an astral character lands the caret
+    // inside it.
+    var column = state.column >= 0
+        ? state.column
+        : characterCount(text, lineStart(text, position), position);
     state.column = column;
     var start = lineStart(text, position);
     for (var i = 0; i < Math.abs(delta); i++) {
@@ -1139,7 +1146,7 @@ function verticalMove(state, text, position, delta) {
             start = lineStart(text, start - 1);
         }
     }
-    return Math.min(start + column, lineEnd(text, start));
+    return Math.min(stepForward(text, start, column), lineEnd(text, start));
 }
 
 // ---------------------------------------------------------------- registers

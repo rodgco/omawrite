@@ -281,6 +281,27 @@ private slots:
         QCOMPARE(runVim(editor.data(), spacedEmoji, 4, QStringLiteral("dge")).text,
                  QStringLiteral("a"));
 
+        // A motion that stops between the halves of a character is as bad as a
+        // range that splits one: the caret looks right and the next x takes
+        // half a pair. t stops one character short of its target, and gj and
+        // gk measure their column out in characters on the line they land on.
+        const QString beforeTarget = QStringLiteral("a\U0001F600X");
+        QCOMPARE(runVim(editor.data(), beforeTarget, 0, QStringLiteral("tX")).cursor, 1);
+        QCOMPARE(runVim(editor.data(), beforeTarget, 0, QStringLiteral("tXx")).text,
+                 QStringLiteral("aX"));
+        const QString twoEmoji = QStringLiteral("a\U0001F600 b\U0001F600 c");
+        QCOMPARE(runVim(editor.data(), twoEmoji, 0, QStringLiteral("t ;")).cursor, 5);
+        QCOMPARE(runVim(editor.data(), twoEmoji, 0, QStringLiteral("t ;x")).text,
+                 QStringLiteral("a\U0001F600 b c"));
+        const QString emojiBelow = QStringLiteral("ab\n\U0001F600z");
+        QCOMPARE(runVim(editor.data(), emojiBelow, 1, QStringLiteral("gj")).cursor, 5);
+        QCOMPARE(runVim(editor.data(), emojiBelow, 1, QStringLiteral("gjx")).text,
+                 QStringLiteral("ab\n\U0001F600"));
+        const QString emojiAbove = QStringLiteral("\U0001F600b\nc\U0001F600");
+        QCOMPARE(runVim(editor.data(), emojiAbove, 5, QStringLiteral("gk")).cursor, 2);
+        QCOMPARE(runVim(editor.data(), emojiAbove, 5, QStringLiteral("gkx")).text,
+                 QStringLiteral("\U0001F600\nc\U0001F600"));
+
         // j and k hold the column they started from across a short line.
         QCOMPARE(runVim(editor.data(), QStringLiteral("abcdef\nx\nabcdef"), 4,
                         QStringLiteral("jj")).cursor, 13);
