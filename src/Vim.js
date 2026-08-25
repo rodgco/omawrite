@@ -618,7 +618,11 @@ function insertDelta(before, after, start) {
     while (suffix < shared - prefix
            && before.charAt(before.length - 1 - suffix) === after.charAt(after.length - 1 - suffix))
         suffix++;
-    return {back: Math.max(0, Math.min(start, start - prefix)),
+    // Characters rather than code units: the count is measured here and spent
+    // somewhere else entirely, so a unit count would delete half a character
+    // wherever the repeat happens to land.
+    var back = Math.max(0, Math.min(start, start - prefix));
+    return {back: characterCount(before, start - back, start),
             text: after.slice(prefix, after.length - suffix)};
 }
 
@@ -918,7 +922,9 @@ function applyObject(state, host, key, around) {
     // Without an operator the object becomes the selection, so a second one
     // can grow it or an operator can follow.
     state.anchor = object.start;
-    state.head = clampNormal(text, Math.max(object.start, object.end - 1));
+    // The object's end is past its last character, and the head sits on that
+    // character rather than one code unit back from the end of it.
+    state.head = clampNormal(text, Math.max(object.start, stepBackward(text, object.end, 1)));
     if (object.linewise)
         state.mode = "vline";
     showSelection(state, host);
@@ -1332,7 +1338,10 @@ function toggleCase(state, host, count) {
         return character === upper ? character.toLowerCase() : upper;
     });
     host.replace(position, end, slice);
-    host.setCursor(clampNormal(host.text(), end));
+    // Where the run ends now, not where it ended before: toggling can change
+    // the length of what it covers, and ß becoming SS pushes everything after
+    // it along.
+    host.setCursor(clampNormal(host.text(), position + slice.length));
     commitChange(state);
 }
 
@@ -1398,7 +1407,8 @@ function repeatChange(state, host) {
     if (state.mode === "insert") {
         if (change.insert) {
             var position = host.cursor();
-            host.replace(Math.max(0, position - change.insert.back), position, change.insert.text);
+            host.replace(stepBackward(host.text(), position, change.insert.back),
+                         position, change.insert.text);
         }
         state.mode = "normal";
         state.insertSession = null;

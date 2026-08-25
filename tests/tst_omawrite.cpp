@@ -302,6 +302,26 @@ private slots:
         QCOMPARE(runVim(editor.data(), emojiAbove, 5, QStringLiteral("gkx")).text,
                  QStringLiteral("\U0001F600\nc\U0001F600"));
 
+        // A text object leaves the caret on its last character, which is a
+        // whole character back from the exclusive end rather than one unit.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("\U0001F600"), 0,
+                        QStringLiteral("viw<Esc>")).cursor, 0);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("\U0001F600"), 0,
+                        QStringLiteral("viw<Esc>x")).text, QString());
+
+        // What . deletes behind the caret is counted in characters, because it
+        // is measured during one insert and spent wherever the repeat lands.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("a \U0001F600x"), 1,
+                        QStringLiteral("i<Backspace><Esc>wl.")).text,
+                 QStringLiteral(" x"));
+
+        // ~ leaves the caret after the run it toggled, and toggling can change
+        // that run's length: ß becomes SS and pushes the rest along.
+        QCOMPARE(runVim(editor.data(), QStringLiteral("ß\U0001F600x"), 0,
+                        QStringLiteral("2~")).cursor, 4);
+        QCOMPARE(runVim(editor.data(), QStringLiteral("ß\U0001F600x"), 0,
+                        QStringLiteral("2~x")).text, QStringLiteral("SS\U0001F600"));
+
         // j and k hold the column they started from across a short line.
         QCOMPARE(runVim(editor.data(), QStringLiteral("abcdef\nx\nabcdef"), 4,
                         QStringLiteral("jj")).cursor, 13);
