@@ -886,9 +886,36 @@ private slots:
         QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
         QCOMPARE(editor->property("text").toString(), QStringLiteral("xbeta"));
 
+        // The font picker shares the footer with Vim's controls. Typing in its
+        // filter must not run Vim commands, and closing it must return focus
+        // to the editor without changing the mode or the undo history.
+        QObject *fontButton = window->findChild<QObject *>(QStringLiteral("fontButton"));
+        QObject *fontPicker = window->findChild<QObject *>(QStringLiteral("fontPicker"));
+        QVERIFY(fontButton);
+        QVERIFY(fontPicker);
+        QVERIFY(QMetaObject::invokeMethod(fontButton, "clicked"));
+        QTRY_VERIFY(fontPicker->property("opened").toBool());
+        typeInto(window, QStringLiteral("mono"));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("xbeta"));
+
+        const QString selectedFont = backend.availableFonts().value(1);
+        QVERIFY(!selectedFont.isEmpty());
+        QVERIFY(QMetaObject::invokeMethod(fontPicker, "choose", Q_ARG(QVariant, selectedFont)));
+        QTRY_VERIFY(!fontPicker->property("visible").toBool());
+        QCOMPARE(backend.editorFont(), selectedFont);
+        QCOMPARE(editor->property("font").value<QFont>().family(), selectedFont);
+        QTRY_VERIFY(editor->property("activeFocus").toBool());
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
+        QTest::keyClick(window, Qt::Key_X);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("beta"));
+        QTest::keyClick(window, Qt::Key_U);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("xbeta"));
+        backend.setEditorFont(Backend::defaultEditorFont());
+
         backend.setVimMode(false);
         QCOMPARE(window->property("vimStatus").toString(), QString());
-        // Escape stepped the caret back onto the x, so plain typing lands there.
+        // With Vim off, plain typing at the start inserts text normally.
+        editor->setProperty("cursorPosition", 0);
         QTest::keyClick(window, Qt::Key_D);
         QCOMPARE(editor->property("text").toString(), QStringLiteral("dxbeta"));
     }
