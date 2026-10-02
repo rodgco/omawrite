@@ -23,10 +23,10 @@ int main(int argc, char *argv[]) {
     app.setOrganizationName(QStringLiteral("Omacom"));
     app.setOrganizationDomain(QStringLiteral("omacom.io"));
 
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/iAWriterMonoS-Regular.ttf"));
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/iAWriterMonoS-Italic.ttf"));
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/iAWriterMonoS-Bold.ttf"));
-    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/iAWriterMonoS-BoldItalic.ttf"));
+    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-Regular.ttf"));
+    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-Italic.ttf"));
+    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-Bold.ttf"));
+    QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-BoldItalic.ttf"));
 
     QQuickStyle::setStyle(QStringLiteral("Material"));
 
@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
 
     // Carry the desktop's text scale into the default font, so the chrome that
     // inherits it (dialog titles, buttons) grows along with the writing area.
-    const QFont interfaceFont(QStringLiteral("iA Writer Mono S"));
+    const QFont interfaceFont(QStringLiteral("IBM Plex Mono"));
     const qreal basePointSize = interfaceFont.pointSizeF() > 0
         ? interfaceFont.pointSizeF()
         : app.font().pointSizeF();

@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QDesktopServices>
 #include <QGuiApplication>
 #include <QMimeData>
@@ -36,6 +37,25 @@
 constexpr qreal typoraLineHeightPercent = 140;
 const QString lastSaveDirectorySetting = QStringLiteral("file/lastSaveDirectory");
 const QString vimModeSetting = QStringLiteral("editor/vimMode");
+const QString editorFontSetting = QStringLiteral("editor/font");
+
+// Noto ships a separate family per script, which buries every other font in
+// the picker. Offer only the core Latin families; the rest still serve as
+// fallbacks for whatever scripts a document contains.
+const QStringList keptNotoFamilies = {QStringLiteral("Noto Sans"),
+                                      QStringLiteral("Noto Sans Mono"),
+                                      QStringLiteral("Noto Serif")};
+
+// Fontconfig's generic aliases just point at another listed family.
+const QStringList genericFontAliases = {QStringLiteral("Monospace"), QStringLiteral("Mono"),
+                                        QStringLiteral("Sans Serif"), QStringLiteral("Sans"),
+                                        QStringLiteral("Serif"), QStringLiteral("System-ui")};
+
+// Symbol fonts often claim Latin coverage because they map their glyphs onto
+// ASCII, so they can only be told apart by name. D050000L is URW's Dingbats.
+const QRegularExpression symbolFontName(
+    QStringLiteral("symbol|dingbat|emoji|icon|awesome|^D050000L$"),
+    QRegularExpression::CaseInsensitiveOption);
 
 QString Backend::normalizedLinkUrl(const QString &clipboardText) {
     QString candidate = clipboardText.trimmed();
@@ -73,6 +93,11 @@ QString Backend::normalizedLinkUrl(const QString &clipboardText) {
 }
 
 Backend::Backend(QObject *parent) : QObject(parent) {
+    const QString savedFont = QSettings().value(editorFontSetting).toString();
+    m_editorFont = !savedFont.isEmpty() && QFontDatabase::hasFamily(savedFont)
+        ? savedFont
+        : defaultEditorFont();
+
     const QString stateDirectory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(stateDirectory);
     // Claim an orphaned snapshot before taking an empty slot. This ensures a
@@ -496,6 +521,59 @@ void Backend::saveWindowGeometry(int x, int y, int width, int height, bool maxim
         settings.setValue(QStringLiteral("window/height"), height);
     }
     settings.setValue(QStringLiteral("window/maximized"), maximized);
+}
+
+QString Backend::defaultEditorFont() {
+    return QStringLiteral("IBM Plex Mono");
+}
+
+void Backend::setEditorFont(const QString &family) {
+    if (family.isEmpty() || family == m_editorFont)
+        return;
+
+    m_editorFont = family;
+    QSettings().setValue(editorFontSetting, family);
+    emit editorFontChanged();
+}
+
+QStringList Backend::availableFonts() const {
+    // Leave out icon, emoji, and other symbol fonts, along with anything that
+    // cannot set the Latin text the editor is written in.
+    QStringList families;
+    for (const QString &family : QFontDatabase::families(QFontDatabase::Latin)) {
+        if (QFontDatabase::isPrivateFamily(family)
+                || QFontDatabase::writingSystems(family).contains(QFontDatabase::Symbol))
+            continue;
+        families.append(family);
+    }
+    return selectableFontFamilies(families);
+}
+
+QStringList Backend::selectableFontFamilies(const QStringList &families) {
+    QStringList selectable;
+    static const QRegularExpression foundrySuffix(QStringLiteral("\\s*\\[[^\\]]*\\]$"));
+    for (QString family : families) {
+        // The same family from two foundries is listed as "Name [Foundry]".
+        family.remove(foundrySuffix);
+        if (family.startsWith(QStringLiteral("Noto ")) && !keptNotoFamilies.contains(family))
+            continue;
+        if (genericFontAliases.contains(family, Qt::CaseInsensitive)
+                || family.contains(symbolFontName))
+            continue;
+        if (family == defaultEditorFont() || selectable.contains(family, Qt::CaseInsensitive))
+            continue;
+        selectable.append(family);
+    }
+    std::sort(selectable.begin(), selectable.end(), [](const QString &a, const QString &b) {
+        return a.compare(b, Qt::CaseInsensitive) < 0;
+    });
+    selectable.prepend(defaultEditorFont());
+    return selectable;
+}
+
+void Backend::documentFontChanged() {
+    if (m_highlighter)
+        m_highlighter->refreshFont();
 }
 
 void Backend::loadDocumentText(const QString &text) {

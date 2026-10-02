@@ -52,6 +52,45 @@ private slots:
                  QStringLiteral("Already.md"));
     }
 
+    void keepsNotoFromCrowdingTheFontList() {
+        const QStringList fonts = Backend::selectableFontFamilies({
+            QStringLiteral("Noto Sans Devanagari"), QStringLiteral("Liberation Serif"),
+            QStringLiteral("Noto Serif"), QStringLiteral("Noto Sans Tamil UI"),
+            QStringLiteral("adwaita Sans"), QStringLiteral("IBM Plex Mono"),
+            QStringLiteral("Noto Sans"), QStringLiteral("Noto Sans Mono"),
+            QStringLiteral("Liberation Serif"), QStringLiteral("Monospace"),
+            QStringLiteral("Standard Symbols PS"), QStringLiteral("D050000L"),
+            QStringLiteral("Noto Color Emoji"), QStringLiteral("Nimbus Sans [UKWN]"),
+            QStringLiteral("Nimbus Sans [URW ]")});
+        QCOMPARE(fonts, QStringList({QStringLiteral("IBM Plex Mono"),
+                                     QStringLiteral("adwaita Sans"),
+                                     QStringLiteral("Liberation Serif"),
+                                     QStringLiteral("Nimbus Sans"),
+                                     QStringLiteral("Noto Sans"),
+                                     QStringLiteral("Noto Sans Mono"),
+                                     QStringLiteral("Noto Serif")}));
+    }
+
+    void remembersEditorFont() {
+        const QString installed = Backend().availableFonts().value(1);
+        QVERIFY(!installed.isEmpty());
+
+        {
+            Backend backend;
+            QCOMPARE(backend.editorFont(), Backend::defaultEditorFont());
+            QSignalSpy fontSpy(&backend, &Backend::editorFontChanged);
+            backend.setEditorFont(installed);
+            QCOMPARE(fontSpy.count(), 1);
+        }
+
+        QCOMPARE(Backend().editorFont(), installed);
+
+        // A remembered font that has since been uninstalled falls back.
+        QSettings().setValue(QStringLiteral("editor/font"), QStringLiteral("No Such Font"));
+        QCOMPARE(Backend().editorFont(), Backend::defaultEditorFont());
+        QSettings().remove(QStringLiteral("editor/font"));
+    }
+
     void findsInlineMarkdownRanges() {
         const auto markup = MarkdownHighlighter::inlineMarkup(
             QStringLiteral("**bold** and *italic* and [site](https://example.com)"));
