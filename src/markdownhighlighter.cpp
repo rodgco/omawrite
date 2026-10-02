@@ -19,6 +19,13 @@ void MarkdownHighlighter::setDarkMode(bool darkMode) {
     rehighlight();
 }
 
+// The hidden marker spacing is measured from the document's default font, so
+// it has to be remeasured whenever the editor switches typeface.
+void MarkdownHighlighter::refreshFont() {
+    rebuildFormats();
+    rehighlight();
+}
+
 void MarkdownHighlighter::setColors(const QString &background, const QString &foreground,
                                     const QString &accent) {
     if (m_customBackground == background && m_customForeground == foreground

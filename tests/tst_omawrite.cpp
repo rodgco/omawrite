@@ -52,6 +52,45 @@ private slots:
                  QStringLiteral("Already.md"));
     }
 
+    void keepsNotoFromCrowdingTheFontList() {
+        const QStringList fonts = Backend::selectableFontFamilies({
+            QStringLiteral("Noto Sans Devanagari"), QStringLiteral("Liberation Serif"),
+            QStringLiteral("Noto Serif"), QStringLiteral("Noto Sans Tamil UI"),
+            QStringLiteral("adwaita Sans"), QStringLiteral("IBM Plex Mono"),
+            QStringLiteral("Noto Sans"), QStringLiteral("Noto Sans Mono"),
+            QStringLiteral("Liberation Serif"), QStringLiteral("Monospace"),
+            QStringLiteral("Standard Symbols PS"), QStringLiteral("D050000L"),
+            QStringLiteral("Noto Color Emoji"), QStringLiteral("Nimbus Sans [UKWN]"),
+            QStringLiteral("Nimbus Sans [URW ]")});
+        QCOMPARE(fonts, QStringList({QStringLiteral("IBM Plex Mono"),
+                                     QStringLiteral("adwaita Sans"),
+                                     QStringLiteral("Liberation Serif"),
+                                     QStringLiteral("Nimbus Sans"),
+                                     QStringLiteral("Noto Sans"),
+                                     QStringLiteral("Noto Sans Mono"),
+                                     QStringLiteral("Noto Serif")}));
+    }
+
+    void remembersEditorFont() {
+        const QString installed = Backend().availableFonts().value(1);
+        QVERIFY(!installed.isEmpty());
+
+        {
+            Backend backend;
+            QCOMPARE(backend.editorFont(), Backend::defaultEditorFont());
+            QSignalSpy fontSpy(&backend, &Backend::editorFontChanged);
+            backend.setEditorFont(installed);
+            QCOMPARE(fontSpy.count(), 1);
+        }
+
+        QCOMPARE(Backend().editorFont(), installed);
+
+        // A remembered font that has since been uninstalled falls back.
+        QSettings().setValue(QStringLiteral("editor/font"), QStringLiteral("No Such Font"));
+        QCOMPARE(Backend().editorFont(), Backend::defaultEditorFont());
+        QSettings().remove(QStringLiteral("editor/font"));
+    }
+
     void findsInlineMarkdownRanges() {
         const auto markup = MarkdownHighlighter::inlineMarkup(
             QStringLiteral("**bold** and *italic* and [site](https://example.com)"));
@@ -847,9 +886,36 @@ private slots:
         QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
         QCOMPARE(editor->property("text").toString(), QStringLiteral("xbeta"));
 
+        // The font picker shares the footer with Vim's controls. Typing in its
+        // filter must not run Vim commands, and closing it must return focus
+        // to the editor without changing the mode or the undo history.
+        QObject *fontButton = window->findChild<QObject *>(QStringLiteral("fontButton"));
+        QObject *fontPicker = window->findChild<QObject *>(QStringLiteral("fontPicker"));
+        QVERIFY(fontButton);
+        QVERIFY(fontPicker);
+        QVERIFY(QMetaObject::invokeMethod(fontButton, "clicked"));
+        QTRY_VERIFY(fontPicker->property("opened").toBool());
+        typeInto(window, QStringLiteral("mono"));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("xbeta"));
+
+        const QString selectedFont = backend.availableFonts().value(1);
+        QVERIFY(!selectedFont.isEmpty());
+        QVERIFY(QMetaObject::invokeMethod(fontPicker, "choose", Q_ARG(QVariant, selectedFont)));
+        QTRY_VERIFY(!fontPicker->property("visible").toBool());
+        QCOMPARE(backend.editorFont(), selectedFont);
+        QCOMPARE(editor->property("font").value<QFont>().family(), selectedFont);
+        QTRY_VERIFY(editor->property("activeFocus").toBool());
+        QCOMPARE(window->property("vimStatus").toString(), QStringLiteral("NORMAL"));
+        QTest::keyClick(window, Qt::Key_X);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("beta"));
+        QTest::keyClick(window, Qt::Key_U);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("xbeta"));
+        backend.setEditorFont(Backend::defaultEditorFont());
+
         backend.setVimMode(false);
         QCOMPARE(window->property("vimStatus").toString(), QString());
-        // Escape stepped the caret back onto the x, so plain typing lands there.
+        // With Vim off, plain typing at the start inserts text normally.
+        editor->setProperty("cursorPosition", 0);
         QTest::keyClick(window, Qt::Key_D);
         QCOMPARE(editor->property("text").toString(), QStringLiteral("dxbeta"));
     }

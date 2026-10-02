@@ -63,6 +63,12 @@ Item {
                 context.moveTo(5.5, 5.5);
                 context.lineTo(8, 10.5);
                 context.lineTo(10.5, 5.5);
+            } else if (control.iconName === "font") {
+                context.moveTo(3, 13.5);
+                context.lineTo(8, 2.5);
+                context.lineTo(13, 13.5);
+                context.moveTo(5, 9.5);
+                context.lineTo(11, 9.5);
             } else {
                 context.moveTo(2.5, 13);
                 context.lineTo(2.5, 3.5);
